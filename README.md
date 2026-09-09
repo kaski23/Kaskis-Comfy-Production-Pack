@@ -13,12 +13,13 @@ KASKI Nodes is built around the less glamorous parts of real AI/VFX production: 
 - Reusable API settings that can feed multiple generators
 - Production naming tools for shots and reusable reference assets
 - Filename-aware image and video loading
-- 8-bit / 16-bit PNG saving with ComfyUI workflow metadata and custom generation metadata
+- 8-bit / 16-bit PNG saving with ComfyUI workflow metadata, generation metadata and optional embedded reference images
 - WAN/VACE resolution and frame-count helpers
 - Video extension, shortening and temporal smoothing
 - Autogrowing string assembly
 - Small workflow utilities such as JSON fragments, number formatting and asynchronous delay
-- Standalone browser-based PNG metadata inspector
+- ProRes MOV saving with audio retiming, optional alpha and production metadata
+- Standalone browser-based PNG / MOV metadata inspector and documentation-PDF generator
 
 All ComfyUI nodes are grouped below the `KASKI` category.
 
@@ -55,6 +56,18 @@ KASKI Nodes targets recent ComfyUI builds and uses current interfaces including:
 A current ComfyUI installation is strongly recommended.
 
 Local utility nodes do not require external services. API generation requires the corresponding provider access to be configured through ComfyUI.
+
+### ProRes / FFmpeg
+
+The ProRes saver requires an FFmpeg build with ProRes support. KASKI resolves an available FFmpeg executable at runtime and can use `imageio-ffmpeg` as a convenient packaged source.
+
+Recommended Python dependency:
+
+```text
+imageio-ffmpeg
+```
+
+A system FFmpeg installation may also be used, depending on the resolver configuration in `prores_saver.py`.
 
 ---
 
@@ -176,6 +189,8 @@ Features:
 - optional model name
 - optional user prompt
 - optional generation seed
+- optional IMAGE batch containing the visual references used for generation
+- each connected reference frame is embedded as its own 8-bit PNG inside the saved output PNG
 - standard ComfyUI filename-prefix formatting tokens
 
 Custom metadata keys:
@@ -186,31 +201,140 @@ user_prompt
 seed
 ```
 
+Reference images are stored as private ancillary PNG chunks. This keeps the output image self-contained for documentation without changing the visible image data. If no reference IMAGE batch is connected, no reference-image chunks are written.
+
 ComfyUI's own workflow metadata remains stored using its standard keys.
 
 The saver intentionally performs quantization only. Input pixel values are assumed to already represent the desired display-ready image.
 
 ---
 
-## PNG Metadata Toolkit
+## PNG / MOV Metadata Toolkit
 
-The repository also contains a standalone HTML utility:
+The repository also contains a standalone browser utility:
 
 ```text
 KASKI_PNG_Metadata_Toolkit.html
 ```
 
-It runs locally in the browser and can inspect metadata embedded in PNG files.
+It runs fully locally and supports both still-image and video documentation.
 
-The toolkit understands the metadata written by the KASKI saver, including:
+The single-file viewer automatically detects whether the dropped file is a PNG or MOV.
 
+For PNG files it can display:
+
+- saved image
 - model name
 - seed
 - user prompt
 - ComfyUI workflow
 - ComfyUI execution prompt
+- embedded reference images
 
-No ComfyUI installation is required to use the HTML tool.
+For MOV files it can display:
+
+- embedded video preview image
+- model name
+- seed
+- user prompt
+- ComfyUI workflow
+- ComfyUI execution prompt
+- reference filenames
+
+The MOV reader avoids loading the complete video payload. It scans the top-level QuickTime box structure and reads only the `moov` box required for metadata and the embedded preview image. Large ProRes `mdat` payloads therefore do not need to pass through browser memory just to inspect documentation metadata.
+
+The toolkit also provides separate folder-to-PDF modes for PNG and MOV files. Each source file produces a documentation page containing the relevant preview, metadata and references. Long prompts automatically continue onto additional pages.
+
+No ComfyUI installation or server is required to use the HTML tool.
+
+---
+
+## ProRes Saver
+
+Category:
+
+```text
+KASKI/savers
+```
+
+### Save ProRes
+
+Saves a ComfyUI IMAGE batch as a QuickTime `.mov` using Apple ProRes via FFmpeg.
+
+Inputs include:
+
+- IMAGE batch interpreted as consecutive video frames
+- optional AUDIO
+- optional MASK
+- ProRes profile
+- output framerate
+- filename prefix
+- optional model name
+- optional prompt
+- integer seed
+- autogrowing reference-filename STRING inputs
+
+Available profiles:
+
+```text
+ProRes 422 Proxy
+ProRes 422 LT
+ProRes 422
+ProRes 422 HQ
+ProRes 4444
+ProRes 4444 XQ
+```
+
+The 422 profiles use a 10-bit output path. ProRes 4444 supports optional alpha and uses a 10-bit 4:4:4 path. ProRes 4444 XQ is treated as a strict 12-bit target: the saver should error instead of silently pretending a 10-bit encode is 12-bit when the installed FFmpeg backend cannot provide the required path.
+
+### Alpha
+
+The optional MASK input follows normal Comfy semantics:
+
+```text
+0.0 / black  = transparent
+1.0 / white  = visible
+```
+
+Alpha is only used by profiles that support it. If a MASK is connected while a 422 profile is selected, it is ignored with a warning. No automatic mask inversion is performed.
+
+### Audio retiming
+
+Audio is automatically conformed to the exact output video duration:
+
+```text
+video duration = frame_count / output_framerate
+```
+
+This is useful when an IMAGE sequence originated from a video at one framerate but is intentionally saved at another. The saver uses FFmpeg tempo processing to adjust audio duration while preserving pitch, then trims/pads to the exact video duration. Audio is written as uncompressed PCM in the MOV container.
+
+### Video metadata and provenance
+
+The saver stores generation information as QuickTime metadata, including:
+
+```text
+model_name
+user_prompt
+seed
+reference_files
+poster_frame_jpeg
+```
+
+`reference_files` is generated internally from the autogrowing STRING inputs and stored as a JSON array, preserving input order. This allows image, video and audio references to be documented without embedding potentially very large source media into the MOV.
+
+Example:
+
+```json
+[
+  "character_father_v3.png",
+  "camera_reference.mov",
+  "voice_reference.wav"
+]
+```
+
+The saver also embeds a compact JPEG preview generated from video frame 0. This lets the standalone metadata toolkit display a representative video image even when the browser cannot decode ProRes itself. The preview is documentation-only and does not modify the encoded ProRes stream.
+
+Standard ComfyUI workflow and execution-prompt metadata are retained as well unless metadata saving has been globally disabled.
 
 ---
 
@@ -566,7 +690,9 @@ KASKI Image API Generator
                  Save PNG with metadata
 ```
 
-This keeps generation provenance attached to the resulting image without embedding provider-specific save logic inside the API adapter.
+Optional reference IMAGE batches can be connected to the saver so the exact visual references are carried inside the resulting PNG.
+
+For video workflows, the same provenance idea is intentionally lighter-weight: the ProRes saver stores reference filenames as a JSON array instead of embedding potentially huge image/video/audio sources.
 
 ## Filename-Driven Shot Processing
 
@@ -619,6 +745,7 @@ __init__.py
     ├── ASYNC tools
     ├── ID tools
     ├── image saver
+    ├── ProRes saver
     ├── input conform
     ├── loaders
     ├── string tools
@@ -638,6 +765,7 @@ KASKI-Nodes/
 ├── async_tools.py
 ├── id_tools.py
 ├── image_saver.py
+├── prores_saver.py
 ├── input_conform.py
 ├── loaders.py
 ├── string_tools.py
@@ -663,7 +791,7 @@ The package follows a few simple principles:
 Where ComfyUI already provides decoding, authentication, provider execution or transport logic, KASKI tries to reuse it instead of maintaining a parallel implementation.
 
 **Keep production identity explicit.**  
-Shot IDs, asset IDs, filenames and generation provenance should survive the workflow rather than becoming implicit knowledge.
+Shot IDs, asset IDs, filenames and generation provenance should survive the workflow rather than becoming implicit knowledge. PNG outputs can carry their visual references directly; video outputs carry reference filenames and a compact preview image so documentation remains useful without turning master files into media archives.
 
 **Small nodes should compose.**  
 A filename loader, an ID parser, a string formatter and a metadata saver are individually simple. Their value comes from making larger workflows predictable.

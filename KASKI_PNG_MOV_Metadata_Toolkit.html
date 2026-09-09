@@ -456,8 +456,9 @@
     </div>
 
     <nav class="tabs">
-      <button class="tab active" data-page="viewerPage">Single PNG</button>
-      <button class="tab" data-page="batchPage">Folder → PDF</button>
+      <button class="tab active" data-page="viewerPage">Single File</button>
+      <button class="tab" data-page="batchPage">PNG Folder → PDF</button>
+      <button class="tab" data-page="videoBatchPage">MOV Folder → PDF</button>
     </nav>
   </header>
 
@@ -469,10 +470,12 @@
       <section class="panel preview-panel">
         <div id="dropzone" class="dropzone">
           <div id="placeholder" class="placeholder">
-            <strong>PNG hier reinziehen</strong>
+            <strong>PNG oder MOV hier reinziehen</strong>
             oder klicken, um eine Datei auszuwählen
           </div>
           <img id="preview" alt="PNG preview">
+          <canvas id="unifiedVideoPreview"
+                  style="display:none; width:100%; height:100%; max-height:calc(100vh - 165px); object-fit:contain;"></canvas>
         </div>
 
         <div id="referenceStrip" class="reference-strip">
@@ -482,8 +485,8 @@
 
         <div class="preview-footer">
           <span id="status">Keine Datei geladen</span>
-          <label class="button" for="fileInput">PNG öffnen</label>
-          <input id="fileInput" type="file" accept="image/png,.png">
+          <label class="button" for="fileInput">Datei öffnen</label>
+          <input id="fileInput" type="file" accept="image/png,video/quicktime,.png,.mov">
         </div>
       </section>
 
@@ -513,6 +516,14 @@
               <button class="copy" data-copy="seed">Copy</button>
             </div>
             <input id="seed" type="text" readonly>
+          </div>
+
+          <div id="referenceFilesField" class="field" style="display:none">
+            <div class="field-head">
+              <label for="referenceFiles">Reference Files</label>
+              <button class="copy" data-copy="referenceFiles">Copy</button>
+            </div>
+            <textarea id="referenceFiles" readonly style="min-height:110px"></textarea>
           </div>
 
           <div class="field">
@@ -616,6 +627,91 @@
               </tr>
             </thead>
             <tbody id="batchTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ================================================================
+       MOV Folder -> PDF
+       ================================================================ -->
+  <main id="videoBatchPage" class="page">
+    <div class="batch-layout">
+
+      <section class="panel batch-controls">
+        <div class="section-header">Video PDF Report</div>
+
+        <div class="batch-body">
+          <div class="folder-box">
+            <strong>Ordner voller MOVs auswählen</strong>
+            Alle MOVs werden lokal gelesen. Pro Video entsteht eine Dokumentationsseite mit erstem Frame, Dateiname, Modell, Seed, Referenzdateien und Prompt.
+
+            <div class="folder-actions">
+              <label class="button primary" for="videoFolderInput">Ordner wählen</label>
+              <input
+                id="videoFolderInput"
+                type="file"
+                accept="video/quicktime,.mov"
+                multiple
+                webkitdirectory
+                directory
+              >
+
+              <label class="button" for="videoMultiInput">MOV-Dateien wählen</label>
+              <input
+                id="videoMultiInput"
+                type="file"
+                accept="video/quicktime,.mov"
+                multiple
+              >
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="videoPdfName">PDF-Dateiname</label>
+            </div>
+            <input id="videoPdfName" type="text" value="KASKI_MOV_Report.pdf">
+          </div>
+
+          <div class="row">
+            <div>
+              <div class="label" style="margin-bottom:6px">Status</div>
+              <div id="videoBatchStatus" class="subtitle">Noch keine MOVs geladen.</div>
+            </div>
+            <button id="generateVideoPdf" class="primary" disabled>PDF erstellen</button>
+          </div>
+
+          <div class="progress-wrap">
+            <progress id="videoBatchProgress" value="0" max="1"></progress>
+          </div>
+
+          <div class="help">
+            Metadaten werden direkt aus dem QuickTime-Container gelesen. KASKI-MOVs enthalten ein eingebettetes JPEG-Preview-Bild; bei älteren MOVs versucht das Toolkit ersatzweise die lokale Browser-Videodekodierung.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <span id="videoBatchCount">0 MOVs</span>
+        </div>
+
+        <div class="table-wrap">
+          <div class="empty" id="videoBatchEmpty">Noch kein Ordner geladen.</div>
+          <table id="videoBatchTable" style="display:none">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Dateiname</th>
+                <th>Modell</th>
+                <th>Seed</th>
+                <th>References</th>
+                <th>Prompt</th>
+              </tr>
+            </thead>
+            <tbody id="videoBatchTbody"></tbody>
           </table>
         </div>
       </section>
@@ -835,6 +931,371 @@
   }
 
   // ------------------------------------------------------------------
+  // QuickTime / MOV metadata parser
+  // ------------------------------------------------------------------
+
+  const MOV_FALLBACKS = {
+    model: "-- Model Info not in Metadata ---",
+    seed: "-- Seed not in Metadata ---",
+    prompt: "-- Prompt not in Metadata ---"
+  };
+
+  function readFourCC(bytes, offset) {
+    if (offset + 4 > bytes.length) return "";
+    return String.fromCharCode(
+      bytes[offset],
+      bytes[offset + 1],
+      bytes[offset + 2],
+      bytes[offset + 3]
+    );
+  }
+
+  function readUint64BE(view, offset) {
+    const hi = view.getUint32(offset, false);
+    const lo = view.getUint32(offset + 4, false);
+    return hi * 4294967296 + lo;
+  }
+
+  function readMovBox(bytes, view, offset, limit) {
+    if (offset + 8 > limit) return null;
+
+    let size = readUint32BE(view, offset);
+    const type = readFourCC(bytes, offset + 4);
+    let headerSize = 8;
+
+    if (size === 1) {
+      if (offset + 16 > limit) return null;
+      size = readUint64BE(view, offset + 8);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = limit - offset;
+    }
+
+    if (!Number.isFinite(size) || size < headerSize || offset + size > limit) {
+      return null;
+    }
+
+    return {
+      type,
+      start: offset,
+      size,
+      headerSize,
+      dataStart: offset + headerSize,
+      end: offset + size
+    };
+  }
+
+  function listMovBoxes(bytes, view, start, end) {
+    const boxes = [];
+    let offset = start;
+
+    while (offset + 8 <= end) {
+      const box = readMovBox(bytes, view, offset, end);
+      if (!box) break;
+      boxes.push(box);
+      offset = box.end;
+    }
+
+    return boxes;
+  }
+
+  function findChildBox(bytes, view, parentStart, parentEnd, type, skipBytes = 0) {
+    return listMovBoxes(bytes, view, parentStart + skipBytes, parentEnd)
+      .find(box => box.type === type) || null;
+  }
+
+  function parseMdtaKeys(bytes, view, keysBox) {
+    const keys = new Map();
+    if (!keysBox || keysBox.dataStart + 8 > keysBox.end) return keys;
+
+    let p = keysBox.dataStart + 4; // version + flags
+    const count = readUint32BE(view, p);
+    p += 4;
+
+    for (let i = 1; i <= count && p + 8 <= keysBox.end; i++) {
+      const entrySize = readUint32BE(view, p);
+      if (entrySize < 8 || p + entrySize > keysBox.end) break;
+
+      const namespace = readFourCC(bytes, p + 4);
+      const keyBytes = bytes.slice(p + 8, p + entrySize);
+      const key = utf8.decode(keyBytes);
+
+      if (namespace === "mdta" && key) {
+        keys.set(i, key);
+      }
+
+      p += entrySize;
+    }
+
+    return keys;
+  }
+
+  function decodeMovMetadataValue(typeCode, payload) {
+    if (typeCode === 1 || typeCode === 0) {
+      return utf8.decode(payload);
+    }
+
+    if (typeCode === 21 && payload.length >= 1 && payload.length <= 8) {
+      let value = 0;
+      for (const byte of payload) value = value * 256 + byte;
+      return String(value);
+    }
+
+    try {
+      return utf8.decode(payload);
+    } catch {
+      return "";
+    }
+  }
+
+  function parseMdtaIlst(bytes, view, ilstBox, keys) {
+    const metadata = {};
+    if (!ilstBox) return metadata;
+
+    for (const item of listMovBoxes(bytes, view, ilstBox.dataStart, ilstBox.end)) {
+      const keyIndex = (
+        (bytes[item.start + 4] << 24) |
+        (bytes[item.start + 5] << 16) |
+        (bytes[item.start + 6] << 8) |
+        bytes[item.start + 7]
+      ) >>> 0;
+
+      const key = keys.get(keyIndex);
+      if (!key) continue;
+
+      const dataBox = findChildBox(bytes, view, item.dataStart, item.end, "data");
+      if (!dataBox || dataBox.dataStart + 8 > dataBox.end) continue;
+
+      const typeCode = readUint32BE(view, dataBox.dataStart) & 0x00ffffff;
+      const payload = bytes.slice(dataBox.dataStart + 8, dataBox.end);
+      metadata[key] = decodeMovMetadataValue(typeCode, payload);
+    }
+
+    return metadata;
+  }
+
+  function findMovMetaBox(bytes, view) {
+    const top = listMovBoxes(bytes, view, 0, bytes.length);
+    const moov = top.find(box => box.type === "moov");
+    if (!moov) return null;
+
+    const udta = findChildBox(bytes, view, moov.dataStart, moov.end, "udta");
+    if (udta) {
+      const meta = findChildBox(bytes, view, udta.dataStart, udta.end, "meta");
+      if (meta) return meta;
+    }
+
+    return findChildBox(bytes, view, moov.dataStart, moov.end, "meta");
+  }
+
+  async function readFileSlice(file, start, end) {
+    return await file.slice(start, end).arrayBuffer();
+  }
+
+  async function readTopLevelBoxHeader(file, offset) {
+    const probeEnd = Math.min(file.size, offset + 16);
+    const buffer = await readFileSlice(file, offset, probeEnd);
+    const bytes = new Uint8Array(buffer);
+    const view = new DataView(buffer);
+
+    if (bytes.length < 8) return null;
+
+    let size = readUint32BE(view, 0);
+    const type = readFourCC(bytes, 4);
+    let headerSize = 8;
+
+    if (size === 1) {
+      if (bytes.length < 16) return null;
+      size = readUint64BE(view, 8);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = file.size - offset;
+    }
+
+    if (!Number.isFinite(size) || size < headerSize || offset + size > file.size) {
+      return null;
+    }
+
+    return {
+      type,
+      start: offset,
+      size,
+      headerSize,
+      end: offset + size
+    };
+  }
+
+  async function findTopLevelMovBox(file, wantedType) {
+    let offset = 0;
+
+    while (offset + 8 <= file.size) {
+      const box = await readTopLevelBoxHeader(file, offset);
+      if (!box) {
+        throw new Error("MOV ist beschädigt oder enthält ungültige Boxen.");
+      }
+
+      if (box.type === wantedType) return box;
+
+      offset = box.end;
+    }
+
+    return null;
+  }
+
+  async function parseMOVMetadataFromFile(file) {
+    const moovBox = await findTopLevelMovBox(file, "moov");
+    if (!moovBox) {
+      throw new Error("MOV enthält keine moov-Box.");
+    }
+
+    // Only read the moov box; mdat/video payload is intentionally untouched.
+    const moovBuffer = await readFileSlice(file, moovBox.start, moovBox.end);
+    const bytes = new Uint8Array(moovBuffer);
+    const view = new DataView(moovBuffer);
+
+    const metadata = {};
+    const moov = readMovBox(bytes, view, 0, bytes.length);
+    if (!moov || moov.type !== "moov") {
+      throw new Error("moov-Box konnte nicht gelesen werden.");
+    }
+
+    const udta = findChildBox(bytes, view, moov.dataStart, moov.end, "udta");
+    let meta = null;
+
+    if (udta) {
+      meta = findChildBox(bytes, view, udta.dataStart, udta.end, "meta");
+    }
+
+    if (!meta) {
+      meta = findChildBox(bytes, view, moov.dataStart, moov.end, "meta");
+    }
+
+    if (!meta) return metadata;
+
+    const keys = findChildBox(bytes, view, meta.dataStart, meta.end, "keys", 4);
+    const ilst = findChildBox(bytes, view, meta.dataStart, meta.end, "ilst", 4);
+
+    return parseMdtaIlst(
+      bytes,
+      view,
+      ilst,
+      parseMdtaKeys(bytes, view, keys)
+    );
+  }
+
+  function parseReferenceFiles(metadata) {
+    const raw = firstValue(metadata, ["reference_files"]);
+    if (!raw) return [];
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map(value => String(value).trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to a human-readable single entry.
+    }
+
+    return [raw];
+  }
+
+  function normalizedMovMetadata(metadata) {
+    return {
+      model: firstValue(metadata, ["model_name", "modelName", "model"]) || MOV_FALLBACKS.model,
+      seed: firstValue(metadata, ["seed"]) || MOV_FALLBACKS.seed,
+      prompt: firstValue(metadata, ["user_prompt", "positive_prompt"]) || MOV_FALLBACKS.prompt,
+      references: parseReferenceFiles(metadata)
+    };
+  }
+
+  function formatReferenceFiles(references) {
+    if (!references?.length) return "";
+    return references.join("\n");
+  }
+
+  function base64ToBytes(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    return bytes;
+  }
+
+  async function loadEmbeddedPosterFrame(metadata) {
+    const encoded = firstValue(metadata, ["poster_frame_jpeg"]);
+    if (!encoded) return null;
+
+    const bytes = base64ToBytes(encoded);
+    const blob = new Blob([bytes], { type: "image/jpeg" });
+    return await loadBitmap(blob);
+  }
+
+  async function captureFirstVideoFrame(file) {
+    const url = URL.createObjectURL(file);
+
+    try {
+      const video = document.createElement("video");
+      video.preload = "auto";
+      video.muted = true;
+      video.playsInline = true;
+      video.src = url;
+
+      await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          video.removeEventListener("loadeddata", onLoaded);
+          video.removeEventListener("error", onError);
+        };
+
+        const onLoaded = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error(
+            "Der Browser kann den Videocodec nicht dekodieren."
+          ));
+        };
+
+        video.addEventListener("loadeddata", onLoaded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        video.load();
+      });
+
+      if (!video.videoWidth || !video.videoHeight) {
+        throw new Error("Video Preview Image could not be obtained.");
+      }
+
+      // loadeddata exposes the first decodable frame at the start position.
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      return canvas;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function drawCanvasIntoCanvas(source, target) {
+    target.width = source.width;
+    target.height = source.height;
+    const ctx = target.getContext("2d", { alpha: false });
+    ctx.drawImage(source, 0, 0);
+  }
+
+  // ------------------------------------------------------------------
   // Single viewer
   // ------------------------------------------------------------------
 
@@ -876,53 +1337,155 @@
     referenceStrip.classList.add("visible");
   }
 
+  const unifiedVideoPreview = $("unifiedVideoPreview");
+  const referenceFilesField = $("referenceFilesField");
+
+  function resetUnifiedPreview() {
+    if (currentObjectUrl) {
+      URL.revokeObjectURL(currentObjectUrl);
+      currentObjectUrl = null;
+    }
+
+    clearReferencePreview();
+
+    preview.removeAttribute("src");
+    preview.style.display = "none";
+
+    const vctx = unifiedVideoPreview.getContext("2d");
+    vctx.clearRect(0, 0, unifiedVideoPreview.width, unifiedVideoPreview.height);
+    unifiedVideoPreview.style.display = "none";
+
+    referenceFilesField.style.display = "none";
+    setField("referenceFiles", "");
+
+    placeholder.innerHTML =
+      "<strong>PNG oder MOV hier reinziehen</strong>" +
+      "oder klicken, um eine Datei auszuwählen";
+    placeholder.style.display = "block";
+  }
+
+  function isSupportedSingleFile(file) {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".png") || name.endsWith(".mov");
+  }
+
+  async function loadSinglePNG(file) {
+    const buffer = await file.arrayBuffer();
+    const parsed = await parsePNGMetadata(buffer);
+    const metadata = parsed.metadata;
+    const normalized = normalizedMetadata(metadata);
+
+    setField("filename", file.name);
+    setField("model", normalized.model);
+    setField("seed", normalized.seed);
+    setField("prompt", normalized.prompt);
+
+    const workflowParts = [];
+    if (metadata.workflow) {
+      workflowParts.push("WORKFLOW\\n\\n" + prettyJSON(metadata.workflow));
+    }
+    if (metadata.prompt) {
+      workflowParts.push("EXECUTION PROMPT\\n\\n" + prettyJSON(metadata.prompt));
+    }
+    setField("workflow", workflowParts.join("\\n\\n\\n"));
+
+    currentObjectUrl = URL.createObjectURL(file);
+    preview.src = currentObjectUrl;
+    preview.style.display = "block";
+    unifiedVideoPreview.style.display = "none";
+    placeholder.style.display = "none";
+
+    renderReferencePreview(parsed.referenceImages);
+
+    const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
+    const refInfo = parsed.referenceImages.length
+      ? ` · ${parsed.referenceImages.length} Referenzbild${parsed.referenceImages.length === 1 ? "" : "er"}`
+      : "";
+
+    status.textContent =
+      `${sizeMiB} MB · PNG · ${Object.keys(metadata).length} Text-Metadatenfelder${refInfo}`;
+  }
+
+  async function loadSingleMOV(file) {
+    const metadata = await parseMOVMetadataFromFile(file);
+    const normalized = normalizedMovMetadata(metadata);
+
+    setField("filename", file.name);
+    setField("model", normalized.model);
+    setField("seed", normalized.seed);
+    setField("prompt", normalized.prompt);
+
+    if (normalized.references.length) {
+      referenceFilesField.style.display = "block";
+      setField("referenceFiles", formatReferenceFiles(normalized.references));
+    }
+
+    const workflowParts = [];
+    if (metadata.workflow) {
+      workflowParts.push("WORKFLOW\\n\\n" + prettyJSON(metadata.workflow));
+    }
+    if (metadata.prompt) {
+      workflowParts.push("EXECUTION PROMPT\\n\\n" + prettyJSON(metadata.prompt));
+    }
+    setField("workflow", workflowParts.join("\\n\\n\\n"));
+
+    let frameInfo = "";
+
+    try {
+      let frame = await loadEmbeddedPosterFrame(metadata);
+      let frameSource = "eingebetteter Preview-Bild";
+
+      if (!frame) {
+        frame = await captureFirstVideoFrame(file);
+        frameSource = "Video Preview";
+      }
+
+      drawCanvasIntoCanvas(frame, unifiedVideoPreview);
+      unifiedVideoPreview.style.display = "block";
+      preview.style.display = "none";
+      placeholder.style.display = "none";
+      frameInfo = ` · ${frame.width}×${frame.height} ${frameSource}`;
+
+      if (typeof frame.close === "function") {
+        frame.close();
+      }
+    } catch (frameErr) {
+      console.warn(frameErr);
+      placeholder.innerHTML =
+        "<strong>Frame-Vorschau nicht verfügbar</strong>" +
+        "Weder eingebetteter Preview-Bild noch Browser-Decoding waren verfügbar.";
+      placeholder.style.display = "block";
+      frameInfo = " · Frame-Vorschau nicht verfügbar";
+    }
+
+    const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
+    const refInfo = normalized.references.length
+      ? ` · ${normalized.references.length} Referenzdatei${normalized.references.length === 1 ? "" : "en"}`
+      : "";
+
+    status.textContent =
+      `${sizeMiB} MB · MOV · ${Object.keys(metadata).length} Metadata-Felder${refInfo}${frameInfo}`;
+  }
+
   async function loadSingleFile(file) {
     if (!file) return;
 
-    if (file.type && file.type !== "image/png" && !file.name.toLowerCase().endsWith(".png")) {
-      status.textContent = "Bitte eine PNG-Datei auswählen.";
+    if (!isSupportedSingleFile(file)) {
+      status.textContent = "Bitte eine PNG- oder MOV-Datei auswählen.";
       status.className = "status-error";
       return;
     }
 
     status.className = "";
-    status.textContent = "Lese PNG…";
+    status.textContent = "Lese Datei…";
+    resetUnifiedPreview();
 
     try {
-      const buffer = await file.arrayBuffer();
-      const parsed = await parsePNGMetadata(buffer);
-      const metadata = parsed.metadata;
-      const normalized = normalizedMetadata(metadata);
-
-      setField("filename", file.name);
-      setField("model", normalized.model);
-      setField("seed", normalized.seed);
-      setField("prompt", normalized.prompt);
-
-      const workflowParts = [];
-      if (metadata.workflow) {
-        workflowParts.push("WORKFLOW\n\n" + prettyJSON(metadata.workflow));
+      if (file.name.toLowerCase().endsWith(".mov")) {
+        await loadSingleMOV(file);
+      } else {
+        await loadSinglePNG(file);
       }
-      if (metadata.prompt) {
-        workflowParts.push("EXECUTION PROMPT\n\n" + prettyJSON(metadata.prompt));
-      }
-      setField("workflow", workflowParts.join("\n\n\n"));
-
-      if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
-      currentObjectUrl = URL.createObjectURL(file);
-      preview.src = currentObjectUrl;
-      preview.style.display = "block";
-      placeholder.style.display = "none";
-
-      renderReferencePreview(parsed.referenceImages);
-
-      const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
-      const refInfo = parsed.referenceImages.length
-        ? ` · ${parsed.referenceImages.length} Referenzbild${parsed.referenceImages.length === 1 ? "" : "er"}`
-        : "";
-      status.textContent =
-        `${sizeMiB} MB · ${Object.keys(metadata).length} Text-Metadatenfelder${refInfo}`;
-
     } catch (err) {
       console.error(err);
       status.textContent = err?.message || String(err);
@@ -958,10 +1521,11 @@
 
   document.addEventListener("paste", event => {
     const files = [...(event.clipboardData?.files || [])];
-    const png = files.find(file =>
-      file.type === "image/png" || file.name.toLowerCase().endsWith(".png")
-    );
-    if (png) loadSingleFile(png);
+    const media = files.find(file => {
+      const name = file.name.toLowerCase();
+      return name.endsWith(".png") || name.endsWith(".mov");
+    });
+    if (media) loadSingleFile(media);
   });
 
   document.querySelectorAll("[data-copy]").forEach(button => {
@@ -1457,6 +2021,380 @@
 
     return new Uint8Array(await blob.arrayBuffer());
   }
+
+  // ------------------------------------------------------------------
+  // MOV batch loader
+  // ------------------------------------------------------------------
+
+  const videoFolderInput = $("videoFolderInput");
+  const videoMultiInput = $("videoMultiInput");
+  const videoBatchStatus = $("videoBatchStatus");
+  const videoBatchProgress = $("videoBatchProgress");
+  const videoBatchCount = $("videoBatchCount");
+  const videoBatchTable = $("videoBatchTable");
+  const videoBatchEmpty = $("videoBatchEmpty");
+  const videoBatchTbody = $("videoBatchTbody");
+  const generateVideoPdf = $("generateVideoPdf");
+
+  let videoBatchEntries = [];
+
+  function isMOV(file) {
+    return file.name.toLowerCase().endsWith(".mov");
+  }
+
+  async function loadVideoBatch(files) {
+    const movFiles = [...files]
+      .filter(isMOV)
+      .sort((a, b) =>
+        relativeName(a).localeCompare(relativeName(b), undefined, {
+          numeric: true,
+          sensitivity: "base"
+        })
+      );
+
+    videoBatchEntries = [];
+    videoBatchTbody.innerHTML = "";
+    generateVideoPdf.disabled = true;
+    videoBatchProgress.max = Math.max(1, movFiles.length);
+    videoBatchProgress.value = 0;
+
+    if (!movFiles.length) {
+      videoBatchCount.textContent = "0 MOVs";
+      videoBatchTable.style.display = "none";
+      videoBatchEmpty.style.display = "block";
+      videoBatchEmpty.textContent = "Keine MOV-Dateien gefunden.";
+      videoBatchStatus.textContent = "Der gewählte Ordner enthält keine MOVs.";
+      videoBatchStatus.className = "subtitle status-error";
+      return;
+    }
+
+    videoBatchTable.style.display = "table";
+    videoBatchEmpty.style.display = "none";
+    videoBatchStatus.className = "subtitle";
+
+    for (let i = 0; i < movFiles.length; i++) {
+      const file = movFiles[i];
+
+      videoBatchStatus.textContent =
+        `Lese Metadaten ${i + 1}/${movFiles.length}: ${file.name}`;
+
+      try {
+        const metadata = await parseMOVMetadataFromFile(file);
+        const normalized = normalizedMovMetadata(metadata);
+
+        videoBatchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata,
+          ...normalized
+        });
+      } catch (err) {
+        console.warn(`Skipping metadata for ${file.name}:`, err);
+        videoBatchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata: {},
+          model: MOV_FALLBACKS.model,
+          seed: MOV_FALLBACKS.seed,
+          prompt: MOV_FALLBACKS.prompt,
+          references: []
+        });
+      }
+
+      videoBatchProgress.value = i + 1;
+    }
+
+    renderVideoBatchTable();
+
+    videoBatchStatus.textContent =
+      `${videoBatchEntries.length} MOV${videoBatchEntries.length === 1 ? "" : "s"} geladen.`;
+    videoBatchStatus.className = "subtitle status-success";
+    generateVideoPdf.disabled = false;
+  }
+
+  function renderVideoBatchTable() {
+    videoBatchCount.textContent =
+      `${videoBatchEntries.length} MOV${videoBatchEntries.length === 1 ? "" : "s"}`;
+
+    videoBatchTbody.innerHTML = videoBatchEntries.map((entry, i) => {
+      const prompt = entry.prompt || "";
+      const promptPreview =
+        prompt.length > 300 ? prompt.slice(0, 300) + "…" : prompt;
+
+      const references = entry.references?.length
+        ? entry.references.join(", ")
+        : "—";
+
+      return `
+        <tr>
+          <td class="muted">${i + 1}</td>
+          <td>${escapeHTML(entry.file.name)}</td>
+          <td>${escapeHTML(entry.model)}</td>
+          <td>${escapeHTML(entry.seed)}</td>
+          <td class="prompt-cell">${escapeHTML(references)}</td>
+          <td class="prompt-cell">${escapeHTML(promptPreview)}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  videoFolderInput.addEventListener(
+    "change",
+    event => loadVideoBatch(event.target.files || [])
+  );
+
+  videoMultiInput.addEventListener(
+    "change",
+    event => loadVideoBatch(event.target.files || [])
+  );
+
+  // ------------------------------------------------------------------
+  // MOV PDF page rendering
+  // ------------------------------------------------------------------
+
+  function drawVideoReferenceFiles(ctx, references, x, y, maxWidth, maxHeight) {
+    if (!references?.length) return y;
+
+    ctx.font = "600 21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#777777";
+    ctx.fillText(`REFERENCE FILES · ${references.length}`, x, y);
+    y += 34;
+
+    ctx.font = "21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#111111";
+
+    const lines = [];
+    references.forEach((reference, index) => {
+      const prefix = `${index + 1}. `;
+      const wrapped = wrapText(ctx, prefix + reference, maxWidth);
+      lines.push(...wrapped);
+    });
+
+    const lineHeight = 28;
+    const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
+
+    for (const line of lines.slice(0, maxLines)) {
+      ctx.fillText(line, x, y);
+      y += lineHeight;
+    }
+
+    if (lines.length > maxLines) {
+      ctx.fillStyle = "#777777";
+      ctx.fillText(
+        `… ${lines.length - maxLines} weitere Zeile${lines.length - maxLines === 1 ? "" : "n"}`,
+        x,
+        y
+      );
+      y += lineHeight;
+    }
+
+    return y;
+  }
+
+  async function renderVideoEntryPages(entry) {
+    const pages = [];
+    let firstFrame = null;
+    let frameError = null;
+
+    try {
+      firstFrame = await loadEmbeddedPosterFrame(entry.metadata);
+
+      if (!firstFrame) {
+        firstFrame = await captureFirstVideoFrame(entry.file);
+      }
+    } catch (err) {
+      frameError = err;
+      console.warn(`Could not obtain video preview image for ${entry.file.name}:`, err);
+    }
+
+    {
+      const { canvas, ctx } = setupCanvas();
+
+      // Dedicated filename header: never include selected folder path.
+      const headerEntry = {
+        ...entry,
+        path: entry.file.name
+      };
+
+      let y = drawHeader(ctx, headerEntry, false);
+
+      const imageTop = y;
+      const imageBottom = entry.references?.length ? 840 : 1000;
+      const imageBoxH = imageBottom - imageTop;
+
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(MARGIN, imageTop, CONTENT_W, imageBoxH);
+
+      if (firstFrame) {
+        const dims = bitmapDimensions(firstFrame);
+        const scale = Math.min(
+          CONTENT_W / dims.width,
+          imageBoxH / dims.height
+        );
+
+        const drawW = Math.max(1, dims.width * scale);
+        const drawH = Math.max(1, dims.height * scale);
+        const drawX = MARGIN + (CONTENT_W - drawW) / 2;
+        const drawY = imageTop + (imageBoxH - drawH) / 2;
+
+        ctx.drawImage(firstFrame, drawX, drawY, drawW, drawH);
+      } else {
+        ctx.font = "600 28px Arial, Helvetica, sans-serif";
+        ctx.fillStyle = "#777777";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          "VIDEO PREVIEW IMAGE COULD NOT BE OBTAINED",
+          PAGE_W / 2,
+          imageTop + imageBoxH / 2 - 18
+        );
+
+        ctx.font = "20px Arial, Helvetica, sans-serif";
+        ctx.fillText(
+          frameError?.message || "Video frame unavailable",
+          PAGE_W / 2,
+          imageTop + imageBoxH / 2 + 22
+        );
+        ctx.textAlign = "left";
+      }
+
+      y = imageBottom + 28;
+
+      if (entry.references?.length) {
+        y = drawVideoReferenceFiles(
+          ctx,
+          entry.references,
+          MARGIN,
+          y,
+          CONTENT_W,
+          155
+        ) + 18;
+      }
+
+      const columnGap = 36;
+      const colW = (CONTENT_W - columnGap) / 2;
+
+      drawLabel(ctx, "Model", entry.model, MARGIN, y, colW);
+      drawLabel(ctx, "Seed", entry.seed, MARGIN + colW + columnGap, y, colW);
+
+      y += 100;
+
+      ctx.font = "600 21px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#777777";
+      ctx.fillText("PROMPT", MARGIN, y);
+      y += 34;
+
+      ctx.font = "24px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#111111";
+
+      const promptLines = wrapText(ctx, entry.prompt, CONTENT_W);
+      const lineHeight = 32;
+      const maxMainLines = Math.max(
+        1,
+        Math.floor((PAGE_H - MARGIN - y) / lineHeight)
+      );
+      const mainLines = promptLines.slice(0, maxMainLines);
+
+      for (const line of mainLines) {
+        ctx.fillText(line || " ", MARGIN, y);
+        y += lineHeight;
+      }
+
+      pages.push(canvas);
+
+      let remaining = promptLines.slice(maxMainLines);
+
+      while (remaining.length) {
+        const continuation = setupCanvas();
+        const cctx = continuation.ctx;
+
+        const continuationEntry = {
+          ...entry,
+          path: entry.file.name
+        };
+
+        let cy = drawHeader(cctx, continuationEntry, true);
+
+        cctx.font = "24px Arial, Helvetica, sans-serif";
+        cctx.fillStyle = "#111111";
+
+        const maxLines = Math.max(
+          1,
+          Math.floor((PAGE_H - MARGIN - cy) / lineHeight)
+        );
+
+        const chunk = remaining.slice(0, maxLines);
+
+        for (const line of chunk) {
+          cctx.fillText(line || " ", MARGIN, cy);
+          cy += lineHeight;
+        }
+
+        remaining = remaining.slice(maxLines);
+        pages.push(continuation.canvas);
+      }
+    }
+
+    if (firstFrame && typeof firstFrame.close === "function") {
+      firstFrame.close();
+    }
+
+    return pages;
+  }
+
+  generateVideoPdf.addEventListener("click", async () => {
+    if (!videoBatchEntries.length) return;
+
+    generateVideoPdf.disabled = true;
+    videoFolderInput.disabled = true;
+    videoMultiInput.disabled = true;
+
+    videoBatchStatus.className = "subtitle";
+    videoBatchProgress.max = videoBatchEntries.length;
+    videoBatchProgress.value = 0;
+
+    try {
+      const jpegPages = [];
+
+      for (let i = 0; i < videoBatchEntries.length; i++) {
+        const entry = videoBatchEntries[i];
+
+        videoBatchStatus.textContent =
+          `Rendere ${i + 1}/${videoBatchEntries.length}: ${entry.file.name}`;
+
+        const canvases = await renderVideoEntryPages(entry);
+
+        for (const canvas of canvases) {
+          jpegPages.push(await canvasToJpegBytes(canvas));
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        videoBatchProgress.value = i + 1;
+      }
+
+      videoBatchStatus.textContent =
+        `Baue PDF mit ${jpegPages.length} Seite${jpegPages.length === 1 ? "" : "n"}…`;
+
+      const pdf = buildPDF(jpegPages);
+      const filename = sanitizePdfName($("videoPdfName").value);
+
+      downloadBytes(pdf, filename, "application/pdf");
+
+      videoBatchStatus.textContent =
+        `${filename} erstellt · ${jpegPages.length} Seite${jpegPages.length === 1 ? "" : "n"} · ` +
+        `${(pdf.length / 1024 / 1024).toFixed(1)} MB`;
+      videoBatchStatus.className = "subtitle status-success";
+
+    } catch (err) {
+      console.error(err);
+      videoBatchStatus.textContent = err?.message || String(err);
+      videoBatchStatus.className = "subtitle status-error";
+
+    } finally {
+      generateVideoPdf.disabled = videoBatchEntries.length === 0;
+      videoFolderInput.disabled = false;
+      videoMultiInput.disabled = false;
+    }
+  });
 
   // ------------------------------------------------------------------
   // Tiny offline PDF writer

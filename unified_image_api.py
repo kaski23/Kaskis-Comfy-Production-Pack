@@ -187,15 +187,6 @@ def _model_id(provider: str, selected: str) -> str:
     return selected
 
 
-def _core_seed(provider: str, seed: int) -> int:
-    """Apply only the upstream seed-range mapping used by the original KASKI."""
-    value = int(seed)
-    if not 0 <= value <= 0x7FFFFFFFFFFFFFFF:
-        raise ValueError("KASKI seed must be in the range 0..2^63-1.")
-    if provider in (PROVIDER_OPENAI, PROVIDER_SEEDREAM):
-        return value & 0x7FFFFFFF
-    return value
-
 
 def _openai_selector() -> Input:
     quality_only = _without(_gpt_image_shared_inputs(), "images", "mask")
@@ -525,7 +516,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 IO.Image.Output(display_name="thought_image"),
                 IO.String.Output(display_name="prompt"),
                 IO.String.Output(display_name="modelName"),
-                IO.String.Output(display_name="seed"),
+                IO.Int.Output(display_name="seed"),
             ],
             hidden=[
                 IO.Hidden.auth_token_comfy_org,
@@ -552,7 +543,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
             provider = settings["provider"]
             selected_model = settings["model"]["model"]
             model_name = _model_id(provider, selected_model)
-            effective_seed = _core_seed(provider, seed)
+            effective_seed = int(seed) % 65536
             image_group = _image_group(images)
 
             if provider == PROVIDER_OPENAI:

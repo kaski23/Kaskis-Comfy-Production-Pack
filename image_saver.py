@@ -277,9 +277,9 @@ class SavePNGwithMetadata(IO.ComfyNode):
                     tooltip="Optional text prompt stored as user_prompt.",
                 ),
 
-                IO.String.Input(
+                IO.Int.Input(
                     "seed",
-                    default="",
+                    default=-1,
                     optional=True,
                     tooltip="Optional generation seed stored in PNG metadata.",
                 ),
@@ -303,7 +303,7 @@ class SavePNGwithMetadata(IO.ComfyNode):
         bit_depth="16-bit",
         model_name="",
         user_prompt="",
-        seed="",
+        seed=-1,
     ) -> IO.NodeOutput:
 
         # ---------------------------------------------------------------
@@ -373,10 +373,8 @@ class SavePNGwithMetadata(IO.ComfyNode):
             if user_prompt:
                 metadata["user_prompt"] = str(user_prompt)
 
-            seed_text = str(seed).strip() if seed is not None else ""
+            metadata["seed"] = str(seed).strip()
 
-            if seed_text and seed_text != "-1":
-                metadata["seed"] = seed_text
 
         # ---------------------------------------------------------------
         # Save batch

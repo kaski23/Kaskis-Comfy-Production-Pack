@@ -337,7 +337,7 @@ class SavePNGwithMetadata(IO.ComfyNode):
             # Exclusive creation prevents accidentally overwriting files
             # if another process has used the same counter.
             while True:
-                file = f"{name}_{counter:05}.png"
+                file = f"{name}_{counter:05}_.png"
                 path = os.path.join(full_output_folder, file)
 
                 try:

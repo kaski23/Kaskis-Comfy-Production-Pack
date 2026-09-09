@@ -1,8 +1,8 @@
 from comfy_api.latest import ComfyExtension
 
-from .async_tools import ASYNC_TOOLS_NODE_LIST
-from .id_tools import ID_TOOLS_NODE_LIST
-from .image_saver import IMAGE_SAVER_NODE_LIST
+from .async_tools import ASYNC_TOOLS_NODES_LIST
+from .id_tools import ID_TOOLS_NODES_LIST
+from .image_saver import IMAGE_SAVER_NODES_LIST
 from .input_conform import INPUT_CONFORM_NODES_LIST
 from .loaders import LOADERS_NODES_LIST
 from .string_tools import STRING_TOOLS_NODES_LIST
@@ -15,9 +15,9 @@ class KaskisComfyNodes(ComfyExtension):
     async def get_node_list(self):
         print("[KASKI] V3 get_node_list called")
         return [
-            *ASYNC_TOOLS_NODE_LIST,
-            *ID_TOOLS_NODE_LIST,
-            *IMAGE_SAVER_NODE_LIST,
+            *ASYNC_TOOLS_NODES_LIST,
+            *ID_TOOLS_NODES_LIST,
+            *IMAGE_SAVER_NODES_LIST,
             *INPUT_CONFORM_NODES_LIST,
             *LOADERS_NODES_LIST,
             *STRING_TOOLS_NODES_LIST,

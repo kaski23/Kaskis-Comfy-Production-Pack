@@ -360,6 +360,6 @@ class SavePNGwithMetadata(IO.ComfyNode):
             ui={"images": results},
         )
         
-IMAGE_SAVER_NODE_LIST = [
+IMAGE_SAVER_NODES_LIST = [
     SavePNGwithMetadata,
 ]

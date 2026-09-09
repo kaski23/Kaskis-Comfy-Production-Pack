@@ -17,17 +17,10 @@ class LoadVideoWithFilename(IO.ComfyNode):
     def define_schema(cls):
         input_dir = folder_paths.get_input_directory()
 
-        os.makedirs(
-            input_dir,
-            exist_ok=True,
-        )
-
         files = [
             f
             for f in os.listdir(input_dir)
-            if os.path.isfile(
-                os.path.join(input_dir, f)
-            )
+            if os.path.isfile(os.path.join(input_dir, f))
         ]
 
         files = folder_paths.filter_files_content_types(
@@ -39,11 +32,6 @@ class LoadVideoWithFilename(IO.ComfyNode):
             node_id="LoadVideoWithFilename_KASKI",
             display_name="Load Video with Filename",
             category="KASKI/loaders",
-            search_aliases=[
-                "load video filename",
-                "video filename",
-                "import video",
-            ],
             inputs=[
                 IO.Combo.Input(
                     "file",
@@ -66,22 +54,11 @@ class LoadVideoWithFilename(IO.ComfyNode):
         cls,
         file: str,
     ) -> IO.NodeOutput:
-
-        video_path = folder_paths.get_annotated_filepath(
-            file
-        )
-
-        video = InputImpl.VideoFromFile(
-            video_path
-        )
-
-        filename = os.path.basename(
-            video_path
-        )
+        video_path = folder_paths.get_annotated_filepath(file)
 
         return IO.NodeOutput(
-            video,
-            filename,
+            InputImpl.VideoFromFile(video_path),
+            os.path.basename(video_path),
         )
 
     @classmethod
@@ -89,24 +66,15 @@ class LoadVideoWithFilename(IO.ComfyNode):
         cls,
         file: str,
     ):
-        video_path = folder_paths.get_annotated_filepath(
-            file
-        )
-
-        # Mirrors current core LoadVideo:
-        # avoid hashing potentially huge video files.
-        return os.path.getmtime(
-            video_path
-        )
+        video_path = folder_paths.get_annotated_filepath(file)
+        return os.path.getmtime(video_path)
 
     @classmethod
     def validate_inputs(
         cls,
         file: str,
     ):
-        if not folder_paths.exists_annotated_filepath(
-            file
-        ):
+        if not folder_paths.exists_annotated_filepath(file):
             return f"Invalid video file: {file}"
 
         return True
@@ -122,17 +90,10 @@ class LoadImageWithFilename(IO.ComfyNode):
     def define_schema(cls):
         input_dir = folder_paths.get_input_directory()
 
-        os.makedirs(
-            input_dir,
-            exist_ok=True,
-        )
-
         files = [
             f
             for f in os.listdir(input_dir)
-            if os.path.isfile(
-                os.path.join(input_dir, f)
-            )
+            if os.path.isfile(os.path.join(input_dir, f))
         ]
 
         files = folder_paths.filter_files_content_types(
@@ -144,11 +105,6 @@ class LoadImageWithFilename(IO.ComfyNode):
             node_id="LoadImageWithFilename_KASKI",
             display_name="Load Image with Filename",
             category="KASKI/loaders",
-            search_aliases=[
-                "load image filename",
-                "image filename",
-                "import image",
-            ],
             inputs=[
                 IO.Combo.Input(
                     "image",
@@ -163,6 +119,9 @@ class LoadImageWithFilename(IO.ComfyNode):
                 IO.String.Output(
                     display_name="filename",
                 ),
+                IO.Mask.Output(
+                    display_name="mask",
+                ),
             ],
         )
 
@@ -171,32 +130,17 @@ class LoadImageWithFilename(IO.ComfyNode):
         cls,
         image: str,
     ) -> IO.NodeOutput:
+        image_path = folder_paths.get_annotated_filepath(image)
 
-        image_path = folder_paths.get_annotated_filepath(
-            image
-        )
-
-        # Delegate image decoding entirely to ComfyUI's core loader.
-        #
-        # Current LoadImage returns:
-        #   IMAGE, MASK
-        #
-        # We only need IMAGE.
+        # Delegate decoding/mask handling to ComfyUI core.
         core_loader = nodes.LoadImage()
 
-        loaded = core_loader.load_image(
-            image
-        )
-
-        image_tensor = loaded[0]
-
-        filename = os.path.basename(
-            image_path
-        )
+        image_tensor, mask = core_loader.load_image(image)
 
         return IO.NodeOutput(
             image_tensor,
-            filename,
+            os.path.basename(image_path),
+            mask,
         )
 
     @classmethod
@@ -204,19 +148,12 @@ class LoadImageWithFilename(IO.ComfyNode):
         cls,
         image: str,
     ):
-        image_path = folder_paths.get_annotated_filepath(
-            image
-        )
+        image_path = folder_paths.get_annotated_filepath(image)
 
         m = hashlib.sha256()
 
-        with open(
-            image_path,
-            "rb",
-        ) as f:
-            m.update(
-                f.read()
-            )
+        with open(image_path, "rb") as f:
+            m.update(f.read())
 
         return m.digest().hex()
 
@@ -225,9 +162,7 @@ class LoadImageWithFilename(IO.ComfyNode):
         cls,
         image: str,
     ):
-        if not folder_paths.exists_annotated_filepath(
-            image
-        ):
+        if not folder_paths.exists_annotated_filepath(image):
             return f"Invalid image file: {image}"
 
         return True

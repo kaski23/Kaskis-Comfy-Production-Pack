@@ -466,7 +466,7 @@ class ExtractShotID(IO.ComfyNode):
 # V3 registration
 # ---------------------------------------------------------------------------
 
-ID_TOOLS_NODE_LIST = [
+ID_TOOLS_NODES_LIST = [
     GenerateReferenceID,
     ExtractReferenceID,
     GenerateShotID,

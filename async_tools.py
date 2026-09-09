@@ -34,6 +34,6 @@ class AsyncDelay(IO.ComfyNode):
         return IO.NodeOutput(image)
         
         
-ASYNC_TOOLS_NODE_LIST = [
+ASYNC_TOOLS_NODES_LIST = [
     AsyncDelay,
 ]

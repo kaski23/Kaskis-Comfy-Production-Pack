@@ -1,476 +1,24 @@
-"""
-# =============================================================================
-# KASKI IMAGE API — MAINTAINER / RE-ENTRY NOTES
-# =============================================================================
-#
-# PURPOSE
-# -------
-# This file implements KASKI's unified image-generation interface for ComfyUI.
-#
-# The important architectural rule is:
-#
-#     THIS FILE IS AN ADAPTER AROUND COMFY'S API NODES.
-#     IT MUST NOT BECOME A COPY / FORK OF COMFY'S PROVIDER IMPLEMENTATIONS.
-#
-# Earlier versions of this node contained copied implementations for OpenAI,
-# Gemini, ByteDance Seedream and Black Forest Labs FLUX.2. That made the node
-# large and fragile: every API/model change in ComfyUI had to be manually
-# mirrored here.
-#
-# This version intentionally delegates the actual provider work to the
-# implementations that already ship with:
-#
-#     comfy_api_nodes.nodes_openai
-#     comfy_api_nodes.nodes_gemini
-#     comfy_api_nodes.nodes_bytedance
-#     comfy_api_nodes.nodes_bfl
-#
-# The KASKI layer should therefore stay thin.
-#
-#
-# HIGH-LEVEL DATA FLOW
-# --------------------
-#
-#     KASKI Image API Settings
-#              |
-#              |  produces KASKI_IMAGE_API_SETTINGS
-#              v
-#     KASKI Image API Generator
-#              |
-#              |  chooses provider
-#              |  attaches reference image batch / mask / Gemini files
-#              |  translates KASKI settings into the shape expected by Comfy
-#              v
-#     Comfy built-in API node
-#              |
-#              |  validation
-#              |  image preparation
-#              |  upload/base64 conversion
-#              |  request construction
-#              |  API call
-#              |  polling
-#              |  response parsing
-#              v
-#     KASKI normalizes outputs to:
-#
-#         IMAGE
-#         STRING
-#         IMAGE (thought_image)
-#
-#
-# RESPONSIBILITY BOUNDARY
-# -----------------------
-#
-# KASKI OWNS:
-#
-#   - the unified provider selector
-#   - the KASKI settings socket/type
-#   - the unified generator node
-#   - the common prompt / seed / images / mask / Gemini-files interface
-#   - translating KASKI settings into Comfy's `model` dictionaries
-#   - dispatching to the correct Comfy API node
-#   - normalizing different provider outputs to the same three KASKI outputs
-#   - black placeholder images where a provider has no thought-image output
-#   - KASKI-specific error/fallback behaviour, if present
-#
-# COMFY OWNS:
-#
-#   - provider model IDs
-#   - HTTP endpoints
-#   - request / response classes
-#   - authentication mechanics
-#   - upload mechanics
-#   - base64/image encoding
-#   - image resizing/downscaling required by the provider
-#   - provider-specific validation
-#   - reference-image limits
-#   - resolution constraints
-#   - aspect-ratio constraints
-#   - polling
-#   - response decoding
-#   - provider-specific failure handling
-#   - pricing implementation
-#
-# As a rule:
-#
-#     If code here starts constructing an API request, encoding images,
-#     polling an endpoint or reproducing provider validation, stop.
-#
-#     That logic almost certainly belongs in comfy_api_nodes instead.
-#
-#
-# CORE COMFY NODES USED
-# ---------------------
-#
-# OpenAI:
-#
-#     OpenAIGPTImageNodeV2
-#
-# Used for GPT Image models. Comfy handles generation vs edit requests,
-# multiple reference images, masks, custom resolutions, image preparation,
-# response decoding, etc.
-#
-#
-# Gemini:
-#
-#     GeminiImage2
-#     GeminiNanoBanana2V2
-#
-# Gemini currently needs two adapter paths because Comfy exposes Gemini Pro
-# image generation separately from the newer Nano Banana 2 DynamicCombo node.
-#
-# Gemini is also the only provider whose native output may contain:
-#
-#     image
-#     text
-#     thought_image
-#
-# The KASKI generator exposes these three outputs universally.
-#
-#
-# ByteDance:
-#
-#     ByteDanceSeedreamNodeV2
-#
-# Comfy handles Seedream model selection, presets, reference-image limits,
-# thinking/prompt optimization, sequential generation, uploads and decoding.
-#
-#
-# Black Forest Labs:
-#
-#     Flux2ImageNode
-#
-# Comfy handles FLUX.2 Pro / Max dispatch, reference images, encoding,
-# generation, polling and download.
-#
-#
-# WHY SOME PRIVATE COMFY HELPERS ARE IMPORTED
-# -------------------------------------------
-#
-# This file may import helper functions whose names begin with `_`, for example
-# model-input builders from the provider modules.
-#
-# This is intentional.
-#
-# Rather than copying Comfy's widget definitions into this file, KASKI reuses
-# them where practical and removes only inputs that belong on the unified
-# generator rather than inside the settings node (for example images, masks or
-# files).
-#
-# Trade-off:
-#
-#     private Comfy helper names are not guaranteed to remain stable.
-#
-# If a future ComfyUI update renames one, this file may fail at import time.
-# That is acceptable and preferable to maintaining a fork of the complete API
-# implementation. Fix the affected import/adapter instead of copying Comfy's
-# provider code back into this file.
-#
-#
-# IMPORTANT: CALLING COMFY'S CLASSMETHODS
-# ---------------------------------------
-#
-# Provider execution deliberately uses the underlying function of Comfy's
-# `@classmethod`, conceptually:
-#
-#     await CoreNode.execute.__func__(KASKIClass, ...)
-#
-# rather than simply:
-#
-#     await CoreNode.execute(...)
-#
-# This distinction is important.
-#
-# The provider implementations internally call helpers such as `sync_op()` and
-# upload functions with their `cls` argument.
-#
-# When the KASKI node is the node actually executing in the graph, Comfy has
-# attached the relevant hidden/API execution context to the KASKI class:
-#
-#     auth_token_comfy_org
-#     api_key_comfy_org
-#     unique_id
-#
-# By calling `execute.__func__()` and explicitly passing the active KASKI class
-# as `cls`, the original Comfy provider implementation runs unchanged while
-# still seeing the execution/auth context of the actual KASKI node.
-#
-# If this mechanism ever breaks after a ComfyUI update, investigate THIS FIRST.
-#
-# Do not immediately replace the core calls with copied `sync_op()` code.
-#
-#
-# REFERENCE IMAGES
-# ----------------
-#
-# The KASKI generator intentionally exposes ONE optional IMAGE socket.
-#
-# A Comfy IMAGE tensor may already contain a BHWC batch, so one socket is enough
-# to represent multiple reference images.
-#
-# The adapter wraps that tensor into the Autogrow-style dictionary expected by
-# the newer Comfy API nodes, roughly:
-#
-#     {
-#         "image_1": images
-#     }
-#
-# The provider node itself is responsible for counting / flattening the batch
-# and enforcing its own current reference-image limit.
-#
-# Do NOT duplicate those provider limits in KASKI unless there is a compelling
-# UI-only reason.
-#
-#
-# MASK
-# ----
-#
-# The shared `mask` input is currently relevant to OpenAI GPT Image.
-#
-# It is attached to OpenAI's model dictionary and ignored for providers that do
-# not use it.
-#
-# Validation such as "mask requires exactly one reference image" belongs to the
-# upstream OpenAI node.
-#
-#
-# GEMINI FILES
-# ------------
-#
-# The shared optional GEMINI_INPUT_FILES socket is passed only into Gemini.
-#
-# File conversion/upload/serialization remains Comfy's responsibility.
-#
-#
-# SETTINGS DICTIONARIES
-# ---------------------
-#
-# The settings node produces a small routing dictionary rather than a complete
-# API request.
-#
-# Conceptually:
-#
-#     {
-#         "provider": "...",
-#         "model": {
-#             "model": "...",
-#             ... provider widgets ...
-#         },
-#         ... a few KASKI routing-level values ...
-#     }
-#
-# The nested `model` dictionaries are intentionally shaped to look like the
-# DynamicCombo dictionaries expected by Comfy's own nodes.
-#
-# This makes dispatch mostly:
-#
-#     model = dict(settings["model"])
-#     model["images"] = ...
-#
-#     await ComfyProviderNode.execute(...)
-#
-# Keep this translation shallow.
-#
-#
-# OUTPUT NORMALIZATION
-# --------------------
-#
-# The KASKI generator always exposes:
-#
-#     1. image
-#     2. text
-#     3. thought_image
-#
-# Providers currently map as follows:
-#
-#     OpenAI:
-#         image          = generated image
-#         text           = ""
-#         thought_image  = black placeholder
-#
-#     Gemini Pro:
-#         image          = generated image
-#         text           = Gemini text response
-#         thought_image  = black placeholder
-#
-#     Nano Banana 2:
-#         image          = generated image
-#         text           = Gemini text response
-#         thought_image  = Gemini thought image when available
-#
-#     Seedream:
-#         image          = generated image(s)
-#         text           = ""
-#         thought_image  = black placeholder
-#
-#     FLUX.2:
-#         image          = generated image
-#         text           = ""
-#         thought_image  = black placeholder
-#
-#
-# NODEOUTPUT COMPATIBILITY
-# ------------------------
-#
-# The imported Comfy nodes return `IO.NodeOutput`.
-#
-# KASKI extracts the positional payload and then creates its own NodeOutput with
-# the unified three-output contract.
-#
-# Keep all assumptions about the internal NodeOutput representation isolated in
-# one helper. If Comfy changes NodeOutput internals in the future, there should
-# ideally be ONE compatibility function to update.
-#
-#
-# SEEDS
-# -----
-#
-# The KASKI generator exposes one shared seed input.
-#
-# Provider implementations have different supported integer ranges.
-#
-# Only perform the minimum mapping required to call the upstream node. Do not
-# recreate provider-side randomization or seed semantics here.
-#
-# In particular, a seed may sometimes function primarily as a Comfy cache
-# buster even if the remote backend itself is not deterministic.
-#
-#
-# SYSTEM PROMPT
-# -------------
-#
-# The shared settings node retains a system-prompt field so provider switching
-# does not destroy the value.
-#
-# It is currently meaningful primarily for Gemini.
-#
-# Do not invent provider-side system-prompt support in this adapter where the
-# corresponding Comfy node does not expose it.
-#
-#
-# ERROR HANDLING
-# --------------
-#
-# There are two different categories of errors:
-#
-#   1. ADAPTER ERRORS
-#      Example:
-#          Comfy renamed a node/helper
-#          execute signature changed
-#          NodeOutput contract changed
-#
-#      These indicate that this file needs maintenance.
-#
-#   2. PROVIDER ERRORS
-#      Example:
-#          invalid resolution
-#          too many reference images
-#          blocked generation
-#          API error
-#
-#      These should generally originate from the imported Comfy provider node.
-#
-# Avoid intercepting provider errors merely to reproduce the same validation
-# here.
-#
-#
-# WHEN COMFYUI UPDATES
-# --------------------
-#
-# If this file breaks after updating ComfyUI, check in this order:
-#
-#   1. Do the imported node classes still exist?
-#
-#        OpenAIGPTImageNodeV2
-#        GeminiImage2
-#        GeminiNanoBanana2V2
-#        ByteDanceSeedreamNodeV2
-#        Flux2ImageNode
-#
-#   2. Do the imported private widget/helper functions still exist?
-#
-#   3. Did a provider node's `execute()` signature change?
-#
-#   4. Did the expected shape of its DynamicCombo `model` dict change?
-#
-#   5. Did `IO.NodeOutput` change?
-#
-#   6. Did Comfy change how auth/API execution context is attached to `cls`?
-#
-# Only after checking those should deeper changes be considered.
-#
-#
-# HOW TO ADD A NEW PROVIDER
-# -------------------------
-#
-# Preferred procedure:
-#
-#   1. Find the corresponding built-in node in `comfy_api_nodes`.
-#
-#   2. Import that node.
-#
-#   3. Reuse its widget/input helpers if practical.
-#
-#   4. Add one provider option to KASKI settings.
-#
-#   5. Store only enough information to reconstruct the core node's arguments.
-#
-#   6. Add a tiny dispatch adapter.
-#
-#   7. Normalize its result to:
-#
-#          image, text, thought_image
-#
-# Do NOT start by implementing the provider API yourself.
-#
-#
-# HOW TO ADD A NEW MODEL TO AN EXISTING PROVIDER
-# -----------------------------------------------
-#
-# First check whether Comfy's existing unified provider node already supports
-# it.
-#
-# If yes:
-#
-#     Prefer changing only the KASKI model-selection/routing layer.
-#
-# If the KASKI UI is reusing Comfy's model-input builder and that builder
-# already exposes the new model automatically, ideally no KASKI change beyond
-# routing is necessary.
-#
-# If Comfy itself does not yet support the model, this file is deliberately not
-# the place to create a parallel provider implementation unless there is a
-# strong temporary reason.
-#
-#
-# DESIGN GOAL
-# -----------
-#
-# The health check for this file is simple:
-#
-#     KASKI code should describe KASKI.
-#     Comfy code should describe the provider APIs.
-#
-# If this file starts growing because OpenAI, Google, ByteDance or BFL changed
-# their API internals, the abstraction boundary has probably been crossed.
-#
-# A future maintainer — including ChatGPT returning to this file in a later
-# conversation — should begin by reading this block, then inspect:
-#
-#     1. imports
-#     2. settings construction
-#     3. the core-call helper
-#     4. the four provider dispatch adapters
-#     5. generator output normalization
-#
-# Before editing provider behavior, inspect the corresponding CURRENT file in
-# `ComfyUI/comfy_api_nodes/`. Those files are the source of truth.
-#
-# =============================================================================
+"""KASKI unified image API adapter.
+
+Delegates generation, uploads, validation and response decoding to ComfyUI's
+built-in API nodes. KASKI owns only the shared settings, routing and outputs.
+
+Output contract (unchanged node IDs and socket positions):
+    image, thoughts, thought_image, prompt, modelName, seed
+
+The last three outputs are strings suitable for the KASKI PNG saver.
+The seed is the value passed to the selected Comfy core node, not a promise
+that the remote service implements deterministic generation.
+
+Provider interfaces checked against Comfy-Org/ComfyUI master, 2026-09-09.
+Private upstream widget helpers are intentionally reused rather than forked.
+If a helper or execute signature changes, update this adapter, not the API
+implementation. This module makes no HTTP requests of its own.
 """
 
 from __future__ import annotations
 
+import inspect
 import traceback
 from typing import Any
 
@@ -482,7 +30,11 @@ from comfy_api_nodes.apis.bytedance import (
     RECOMMENDED_PRESETS_SEEDREAM_5_PRO,
 )
 from comfy_api_nodes.nodes_bfl import Flux2ImageNode, _flux2_model_inputs
-from comfy_api_nodes.nodes_bytedance import ByteDanceSeedreamNodeV2, _seedream_model_inputs
+from comfy_api_nodes.nodes_bytedance import (
+    SEEDREAM_MODELS,
+    ByteDanceSeedreamNodeV2,
+    _seedream_model_inputs,
+)
 from comfy_api_nodes.nodes_gemini import (
     GEMINI_IMAGE_SYS_PROMPT,
     GeminiImage2,
@@ -518,9 +70,23 @@ GEMINI_BASE_RATIOS = [
     "9:16", "16:9", "21:9",
 ]
 
+# These labels are translated by the current Gemini core implementations.
+# Keep the same names and IDs here only to record accurate provenance.
+GEMINI_MODEL_IDS = {
+    "gemini-3-pro-image-preview": "gemini-3-pro-image",
+    "Nano Banana 2 (Gemini 3.1 Flash Image)": "gemini-3.1-flash-image",
+    "Nano Banana 2 Lite": "gemini-3.1-flash-lite-image",
+}
+
+# The Flux.2 core routes these two labels to /flux-2-pro/generate and
+# /flux-2-max/generate. These are metadata identifiers, not request logic.
+FLUX2_MODEL_IDS = {
+    "Flux.2 [pro]": "flux-2-pro",
+    "Flux.2 [max]": "flux-2-max",
+}
 
 # -----------------------------------------------------------------------------
-# Generic glue
+# Generic glue / output normalization
 # -----------------------------------------------------------------------------
 
 
@@ -529,15 +95,11 @@ def _black_image(width: int = 1024, height: int = 1024) -> torch.Tensor:
 
 
 def _black_like(image: torch.Tensor) -> torch.Tensor:
-    if not isinstance(image, torch.Tensor) or image.ndim < 3:
+    if not isinstance(image, torch.Tensor) or image.ndim not in (3, 4):
         return _black_image()
-    h, w = (
-        (int(image.shape[1]), int(image.shape[2]))
-        if image.ndim == 4
-        else (int(image.shape[0]), int(image.shape[1]))
-    )
+    h, w = (image.shape[1], image.shape[2]) if image.ndim == 4 else image.shape[:2]
     dtype = image.dtype if image.is_floating_point() else torch.float32
-    return torch.zeros((1, h, w, 3), dtype=dtype, device=image.device)
+    return torch.zeros((1, int(h), int(w), 3), dtype=dtype, device=image.device)
 
 
 def _log_soft_error(where: str, error: Exception) -> None:
@@ -546,12 +108,12 @@ def _log_soft_error(where: str, error: Exception) -> None:
 
 
 def _image_group(images: Input.Image | None) -> dict[str, Input.Image]:
-    # Keep KASKI's one IMAGE socket. Core nodes flatten/count BHWC batches.
+    # A single socket may contain an entire BHWC batch. Upstream flattens it.
     return {} if images is None else {"image_1": images}
 
 
 def _without(inputs: list[Input], *ids: str) -> list[Input]:
-    """Reuse Comfy widget definitions while removing inputs owned by Generator."""
+    """Reuse Comfy widgets, excluding sockets owned by KASKI Generator."""
     blocked = set(ids)
     return [item for item in inputs if getattr(item, "id", None) not in blocked]
 
@@ -561,23 +123,78 @@ async def _run_core(
     active_cls: type[IO.ComfyNode],
     **kwargs: Any,
 ) -> IO.NodeOutput:
-    """
-    Execute Comfy's original classmethod body with KASKI's active node class.
+    """Run the original core classmethod with KASKI's active auth context.
 
-    Comfy's API helpers receive `cls`; injecting the active KASKI class keeps the
-    hidden auth/API context from the node that is actually running in the graph.
+    The executing node is KASKI, not the imported provider class. Passing the
+    active class lets upstream sync_op/upload helpers find the hidden auth,
+    API-key and unique-id context attached by Comfy's execution machinery.
     """
     func = getattr(core_node.execute, "__func__", None)
     if func is None:
+        raise RuntimeError(f"{core_node.__name__}.execute is no longer a classmethod.")
+    result = func(active_cls, **kwargs)
+    return await result if inspect.isawaitable(result) else result
+
+
+def _core_values(result: Any, expected: int, provider: str) -> tuple[Any, ...]:
+    """Unwrap a core result without accidentally indexing an IMAGE tensor."""
+    values = result.args if isinstance(result, IO.NodeOutput) else result
+    if not isinstance(values, (tuple, list)):
+        raise TypeError(f"{provider}: unsupported core output type {type(result).__name__}")
+    if len(values) != expected:
         raise RuntimeError(
-            f"{core_node.__name__}.execute is no longer a classmethod."
+            f"{provider}: expected {expected} core outputs, received {len(values)}. "
+            "The upstream node's output contract may have changed."
         )
-    return await func(active_cls, **kwargs)
+    return tuple(values)
 
 
-# -----------------------------------------------------------------------------
-# Settings UI
-# -----------------------------------------------------------------------------
+def _normalized_output(
+    image: torch.Tensor,
+    thoughts: str | None,
+    thought_image: torch.Tensor | None,
+    prompt: str,
+    model_name: str,
+    seed: int | str,
+) -> IO.NodeOutput:
+    """The one and only six-output boundary for every provider."""
+    if not isinstance(image, torch.Tensor) or image.ndim != 4:
+        raise TypeError("Core image output must be a BHWC torch.Tensor.")
+    if image.shape[0] < 1:
+        raise ValueError("Core returned an empty image batch.")
+    if thought_image is None:
+        thought_image = _black_like(image)
+    if not isinstance(thought_image, torch.Tensor) or thought_image.ndim != 4:
+        raise TypeError("Core thought_image must be a BHWC torch.Tensor.")
+    return IO.NodeOutput(
+        image,
+        "" if thoughts is None else str(thoughts),
+        thought_image,
+        str(prompt),
+        str(model_name),
+        str(seed),
+    )
+
+
+def _model_id(provider: str, selected: str) -> str:
+    """Resolve the selected model to the identifier used by the core."""
+    if provider == PROVIDER_GEMINI:
+        return GEMINI_MODEL_IDS.get(selected, selected)
+    if provider == PROVIDER_SEEDREAM:
+        return SEEDREAM_MODELS[selected]
+    if provider == PROVIDER_FLUX2:
+        return FLUX2_MODEL_IDS.get(selected, selected)
+    return selected
+
+
+def _core_seed(provider: str, seed: int) -> int:
+    """Apply only the upstream seed-range mapping used by the original KASKI."""
+    value = int(seed)
+    if not 0 <= value <= 0x7FFFFFFFFFFFFFFF:
+        raise ValueError("KASKI seed must be in the range 0..2^63-1.")
+    if provider in (PROVIDER_OPENAI, PROVIDER_SEEDREAM):
+        return value & 0x7FFFFFFF
+    return value
 
 
 def _openai_selector() -> Input:
@@ -884,7 +501,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
             category=CATEGORY,
             description=(
                 "Thin router over ComfyUI's built-in OpenAI, Gemini, Seedream "
-                "and FLUX.2 API nodes."
+                "and FLUX.2 API nodes. Outputs image and generation metadata."
             ),
             inputs=[
                 IO.String.Input("prompt", default="", multiline=True),
@@ -904,8 +521,11 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
             ],
             outputs=[
                 IO.Image.Output(display_name="image"),
-                IO.String.Output(display_name="text"),
+                IO.String.Output(display_name="thoughts"),
                 IO.Image.Output(display_name="thought_image"),
+                IO.String.Output(display_name="prompt"),
+                IO.String.Output(display_name="modelName"),
+                IO.String.Output(display_name="seed"),
             ],
             hidden=[
                 IO.Hidden.auth_token_comfy_org,
@@ -930,6 +550,9 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 raise TypeError("settings must come from KASKI Image API Settings")
 
             provider = settings["provider"]
+            selected_model = settings["model"]["model"]
+            model_name = _model_id(provider, selected_model)
+            effective_seed = _core_seed(provider, seed)
             image_group = _image_group(images)
 
             if provider == PROVIDER_OPENAI:
@@ -942,10 +565,12 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     prompt=prompt,
                     model=model,
                     n=settings["n"],
-                    seed=seed & 0x7FFFFFFF,
+                    seed=effective_seed,
                 )
-                image = out[0]
-                return IO.NodeOutput(image, "", _black_like(image))
+                (image,) = _core_values(out, 1, provider)
+                return _normalized_output(
+                    image, "", None, prompt, model_name, effective_seed
+                )
 
             if provider == PROVIDER_GEMINI:
                 if settings["core"] == GEMINI_PRO:
@@ -955,7 +580,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                         cls,
                         prompt=prompt,
                         model=model["model"],
-                        seed=seed,
+                        seed=effective_seed,
                         aspect_ratio=model["aspect_ratio"],
                         resolution=model["resolution"],
                         response_modalities=settings["response_modalities"],
@@ -963,8 +588,10 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                         files=files,
                         system_prompt=settings["system_prompt"],
                     )
-                    image, text = out.args
-                    return IO.NodeOutput(image, text, _black_like(image))
+                    image, text = _core_values(out, 2, provider)
+                    return _normalized_output(
+                        image, text, None, prompt, model_name, effective_seed
+                    )
 
                 model = dict(settings["model"])
                 model["images"] = image_group
@@ -974,13 +601,16 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     cls,
                     prompt=prompt,
                     model=model,
-                    seed=seed,
+                    seed=effective_seed,
                     response_modalities=settings["response_modalities"],
                     system_prompt=settings["system_prompt"],
                     temperature=settings["temperature"],
                     top_p=settings["top_p"],
                 )
-                return IO.NodeOutput(*out.args)
+                image, text, thought_image = _core_values(out, 3, provider)
+                return _normalized_output(
+                    image, text, thought_image, prompt, model_name, effective_seed
+                )
 
             if provider == PROVIDER_SEEDREAM:
                 model = dict(settings["model"])
@@ -990,12 +620,14 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     cls,
                     prompt=prompt,
                     model=model,
-                    seed=seed & 0x7FFFFFFF,
+                    seed=effective_seed,
                     watermark=settings["watermark"],
                     thinking=settings["thinking"],
                 )
-                image = out[0]
-                return IO.NodeOutput(image, "", _black_like(image))
+                (image,) = _core_values(out, 1, provider)
+                return _normalized_output(
+                    image, "", None, prompt, model_name, effective_seed
+                )
 
             if provider == PROVIDER_FLUX2:
                 model = dict(settings["model"])
@@ -1005,25 +637,32 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     cls,
                     prompt=prompt,
                     model=model,
-                    seed=seed,
+                    seed=effective_seed,
                 )
-                image = out[0]
-                return IO.NodeOutput(image, "", _black_like(image))
+                (image,) = _core_values(out, 1, provider)
+                return _normalized_output(
+                    image, "", None, prompt, model_name, effective_seed
+                )
 
             raise ValueError(f"Unknown provider: {provider!r}")
 
         except Exception as error:
+            # Preserve the original KASKI soft-error behavior. An error is
+            # explicitly marked in thoughts, and provenance is left empty.
+            # The returned black image is a placeholder, not an API result.
             _log_soft_error("KASKIImageAPIGenerator.execute", error)
             black = _black_image()
-            return IO.NodeOutput(black, "", black)
+            return _normalized_output(
+                black,
+                f"KASKI API error: {type(error).__name__}: {error}",
+                black,
+                "",
+                "",
+                "",
+            )
 
 
-UNIFIED_IMAGE_API_NODE_CLASS_MAPPINGS = {
-    "ImageAPISettings_KASKI": KASKIImageAPISettings,
-    "ImageAPIGenerator_KASKI": KASKIImageAPIGenerator,
-}
-
-UNIFIED_IMAGE_API_NODE_DISPLAY_NAME_MAPPINGS = {
-    "ImageAPISettings_KASKI": "KASKI Image API Settings",
-    "ImageAPIGenerator_KASKI": "KASKI Image API Generator",
-}
+UNIFIED_IMAGEAPI_NODES_LIST = [
+    KASKIImageAPISettings,
+    KASKIImageAPIGenerator,
+]

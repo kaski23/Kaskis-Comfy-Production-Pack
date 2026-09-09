@@ -1,39 +1,88 @@
+
 import re
 
+from comfy_api.latest import IO
 
-### REFERENCE-ID-TOOLS
+
+# ---------------------------------------------------------------------------
+# Shared constants and helpers
+# ---------------------------------------------------------------------------
 
 REGEX_REFERENCE_ID = re.compile(
     r"(?:[A-Za-z0-9-]+_)?(?:character|prop|location|material)_[A-Za-z0-9-]+_(?:[A-Za-z0-9-]+_)?v(?:[0-9]+|N)"
 )
 
+SHOT_STAGES = [
+    "firstFrame",
+    "lastFrame",
+    "ffToCleanup",
+    "lfToCleanup",
+    "Depth",
+    "Normal",
+    "cgi",
+    "Scribble",
+    "plate",
+    "plateToCleanup",
+    "notEnhanced",
+    "enhanced",
+]
 
-class GenerateReferenceID:
+STAGE_PATTERN = "|".join(map(re.escape, SHOT_STAGES))
+
+REGEX_ID = re.compile(
+    rf"(?:(?P<project_name>[A-Za-z0-9-]+)_)?"
+    rf"(?P<shot>sh[0-9]+)_"
+    rf"(?P<pipeline_step>{STAGE_PATTERN})"
+    rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
+    rf"(?P<version>v(?:[0-9]+|N))"
+)
+
+ID_COMPONENT_REGEX = re.compile(r"[A-Za-z0-9-]+")
+
+CATEGORY = "KASKI/ID-Tools"
+
+
+# ---------------------------------------------------------------------------
+# Reference ID: Generate
+# ---------------------------------------------------------------------------
+
+class GenerateReferenceID(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "project_name": ("STRING", {"default": "NONE", "multiline": False}),
-                "reference_type": (["character", "prop", "location", "material"],),
-                "reference_name": ("STRING", {"default": "", "multiline": False}),
-                "artist_code": ("STRING", {"default": "NONE", "multiline": False}),
-                "version": ("INT", {"default": -1, "min": -1, "max": 10000, "step": 1}),
-            },
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="GenerateReferenceID_KASKI",
+            display_name="Generate Reference ID",
+            category=CATEGORY,
+            inputs=[
+                IO.String.Input("project_name", default="NONE"),
+                IO.Combo.Input(
+                    "reference_type",
+                    options=["character", "prop", "location", "material"],
+                ),
+                IO.String.Input("reference_name", default=""),
+                IO.String.Input("artist_code", default="NONE"),
+                IO.Int.Input(
+                    "version",
+                    default=-1,
+                    min=-1,
+                    max=10000,
+                    step=1,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(display_name="generated ID"),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("generated ID",)
-    FUNCTION = "generate"
-    CATEGORY = "KASKI/ID-Tools"
-
-    def generate(
-        self,
+    @classmethod
+    def execute(
+        cls,
         project_name: str,
         reference_type: str,
         reference_name: str,
         artist_code: str,
         version: int,
-    ):
+    ) -> IO.NodeOutput:
         project_name = project_name.strip()
         reference_name = reference_name.strip()
         artist_code = artist_code.strip()
@@ -92,25 +141,35 @@ class GenerateReferenceID:
                 f"{artist_string}_{version_string}"
             )
 
-        return (out,)
+        return IO.NodeOutput(out)
 
 
-class ExtractReferenceID:
+# ---------------------------------------------------------------------------
+# Reference ID: Extract
+# ---------------------------------------------------------------------------
+
+class ExtractReferenceID(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": False}),
-                "fail_if_not_found": ("BOOLEAN", {"default": True}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="ExtractReferenceID_KASKI",
+            display_name="Extract Reference ID",
+            category=CATEGORY,
+            inputs=[
+                IO.String.Input("text"),
+                IO.Boolean.Input("fail_if_not_found", default=True),
+            ],
+            outputs=[
+                IO.String.Output(display_name="extracted ID"),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("extracted ID",)
-    FUNCTION = "extract"
-    CATEGORY = "KASKI/ID-Tools"
-
-    def extract(self, text: str, fail_if_not_found: bool):
+    @classmethod
+    def execute(
+        cls,
+        text: str,
+        fail_if_not_found: bool,
+    ) -> IO.NodeOutput:
         match = REGEX_REFERENCE_ID.search(text)
 
         if not match:
@@ -119,82 +178,81 @@ class ExtractReferenceID:
                     f"KASKI-Nodes: Couldn't extract Reference ID from: {text}"
                 )
             else:
-                return (text,)
+                return IO.NodeOutput(text)
 
-        return (match.group(0),)
-
-
-### SHOT-ID-TOOLS
-
-SHOT_STAGES = [
-    "firstFrame",
-    "lastFrame",
-    "ffToCleanup",
-    "lfToCleanup",
-    "Depth",
-    "Normal",
-    "cgi",
-    "Scribble",
-    "plate",
-    "plateToCleanup",
-    "notEnhanced",
-    "enhanced",
-]
-
-STAGE_PATTERN = "|".join(map(re.escape, SHOT_STAGES))
-
-REGEX_ID = re.compile(
-    rf"(?:(?P<project_name>[A-Za-z0-9-]+)_)?"
-    rf"(?P<shot>sh[0-9]+)_"
-    rf"(?P<pipeline_step>{STAGE_PATTERN})"
-    rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
-    rf"(?P<version>v(?:[0-9]+|N))"
-)
-
-ID_COMPONENT_REGEX = re.compile(r"[A-Za-z0-9-]+")
+        return IO.NodeOutput(match.group(0))
 
 
-class GenerateShotID:
+# ---------------------------------------------------------------------------
+# Shot ID: Generate
+# ---------------------------------------------------------------------------
+
+class GenerateShotID(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "project_name": ("STRING", {"default": "NONE", "multiline": False}),
-                "shot_no": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
-                "pipeline_step": (SHOT_STAGES,),
-                "artist_code": ("STRING", {"default": "NONE", "multiline": False}),
-                "version": ("INT", {"default": -1, "min": -1, "max": 10000, "step": 1}),
-                "shot_no_zero_padding": (
-                    "INT",
-                    {"default": 3, "min": 0, "max": 15, "step": 1},
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="GenerateShotID_KASKI",
+            display_name="Generate Shot ID",
+            category=CATEGORY,
+            inputs=[
+                IO.String.Input("project_name", default="NONE"),
+                IO.Int.Input(
+                    "shot_no",
+                    default=0,
+                    min=0,
+                    max=10000,
+                    step=1,
                 ),
-            },
-        }
+                IO.Combo.Input(
+                    "pipeline_step",
+                    options=SHOT_STAGES,
+                ),
+                IO.String.Input("artist_code", default="NONE"),
+                IO.Int.Input(
+                    "version",
+                    default=-1,
+                    min=-1,
+                    max=10000,
+                    step=1,
+                ),
+                IO.Int.Input(
+                    "shot_no_zero_padding",
+                    default=3,
+                    min=0,
+                    max=15,
+                    step=1,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(display_name="generated ID"),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("generated ID",)
-    FUNCTION = "generate"
-    CATEGORY = "KASKI/ID-Tools"
-
-    def generate(
-        self,
+    @classmethod
+    def execute(
+        cls,
         project_name: str,
         shot_no: int,
         pipeline_step: str,
         artist_code: str,
         version: int,
         shot_no_zero_padding: int,
-    ):
+    ) -> IO.NodeOutput:
         project_name = project_name.strip()
         artist_code = artist_code.strip()
 
-
-        if project_name not in ("", "NONE") and not ID_COMPONENT_REGEX.fullmatch(project_name):
+        if (
+            project_name not in ("", "NONE")
+            and not ID_COMPONENT_REGEX.fullmatch(project_name)
+        ):
             raise ValueError(
                 f"KASKI-Nodes: project_name {project_name} may only contain letters, numbers and hyphens."
             )
-            
-        if artist_code not in ("", "NONE") and not ID_COMPONENT_REGEX.fullmatch(artist_code):
+
+        if (
+            artist_code not in ("", "NONE")
+            and not ID_COMPONENT_REGEX.fullmatch(artist_code)
+        ):
             raise ValueError(
                 f"KASKI-Nodes: artist_code {artist_code} may only contain letters, numbers and hyphens."
             )
@@ -222,34 +280,55 @@ class GenerateShotID:
                 f"{artist_string}_{version_string}"
             )
 
-        return (out,)
+        return IO.NodeOutput(out)
 
 
-class ModifyShotID:
+# ---------------------------------------------------------------------------
+# Shot ID: Modify
+# ---------------------------------------------------------------------------
+
+class ModifyShotID(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "idx": ("STRING", {"multiline": False}),
-                "project_name": ("STRING", {"default": "KEEP", "multiline": False}),
-                "shot_no": ("INT", {"default": -1, "min": -1, "max": 10000, "step": 1}),
-                "pipeline_step": (["KEEP", *SHOT_STAGES],),
-                "artist_code": ("STRING", {"default": "KEEP", "multiline": False}),
-                "version": (["Keep", "Increment"],),
-                "shot_no_zero_padding": (
-                    "INT",
-                    {"default": 3, "min": 0, "max": 15, "step": 1},
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="ModifyShotID_KASKI",
+            display_name="Modify Shot ID",
+            category=CATEGORY,
+            inputs=[
+                IO.String.Input("idx"),
+                IO.String.Input("project_name", default="KEEP"),
+                IO.Int.Input(
+                    "shot_no",
+                    default=-1,
+                    min=-1,
+                    max=10000,
+                    step=1,
                 ),
-            },
-        }
+                IO.Combo.Input(
+                    "pipeline_step",
+                    options=["KEEP", *SHOT_STAGES],
+                ),
+                IO.String.Input("artist_code", default="KEEP"),
+                IO.Combo.Input(
+                    "version",
+                    options=["Keep", "Increment"],
+                ),
+                IO.Int.Input(
+                    "shot_no_zero_padding",
+                    default=3,
+                    min=0,
+                    max=15,
+                    step=1,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(display_name="modified ID"),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("modified ID",)
-    FUNCTION = "modify"
-    CATEGORY = "KASKI/ID-Tools"
-
-    def modify(
-        self,
+    @classmethod
+    def execute(
+        cls,
         idx: str,
         project_name: str,
         shot_no: int,
@@ -257,30 +336,28 @@ class ModifyShotID:
         artist_code: str,
         version: str,
         shot_no_zero_padding: int,
-    ):
+    ) -> IO.NodeOutput:
         if not REGEX_ID.fullmatch(idx):
-            return (idx,)
+            return IO.NodeOutput(idx)
 
         project_name = project_name.strip()
         artist_code = artist_code.strip()
 
-        if project_name not in ("", "NONE") and not ID_COMPONENT_REGEX.fullmatch(project_name):
+        if (
+            project_name not in ("", "NONE")
+            and not ID_COMPONENT_REGEX.fullmatch(project_name)
+        ):
             raise ValueError(
                 f"KASKI-Nodes: project_name {project_name} may only contain letters, numbers and hyphens."
             )
-            
-        if artist_code not in ("", "NONE") and not ID_COMPONENT_REGEX.fullmatch(artist_code):
+
+        if (
+            artist_code not in ("", "NONE")
+            and not ID_COMPONENT_REGEX.fullmatch(artist_code)
+        ):
             raise ValueError(
                 f"KASKI-Nodes: artist_code {artist_code} may only contain letters, numbers and hyphens."
             )
-
-       
-
-        # Possible structures:
-        # [sh###, pipeline_step, v#]
-        # [project_name, sh###, pipeline_step, v#]
-        # [sh###, pipeline_step, artist_code, v#]
-        # [project_name, sh###, pipeline_step, artist_code, v#]
 
         match = REGEX_ID.fullmatch(idx)
 
@@ -343,25 +420,35 @@ class ModifyShotID:
                     f"{old_artist_code}_{old_version}"
                 )
 
-        return (out,)
+        return IO.NodeOutput(out)
 
 
-class ExtractShotID:
+# ---------------------------------------------------------------------------
+# Shot ID: Extract
+# ---------------------------------------------------------------------------
+
+class ExtractShotID(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": False}),
-                "fail_if_not_found": ("BOOLEAN", {"default": True}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="ExtractShotID_KASKI",
+            display_name="Extract Shot ID",
+            category=CATEGORY,
+            inputs=[
+                IO.String.Input("text"),
+                IO.Boolean.Input("fail_if_not_found", default=True),
+            ],
+            outputs=[
+                IO.String.Output(display_name="extracted ID"),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("extracted ID",)
-    FUNCTION = "extract"
-    CATEGORY = "KASKI/ID-Tools"
-
-    def extract(self, text: str, fail_if_not_found: bool):
+    @classmethod
+    def execute(
+        cls,
+        text: str,
+        fail_if_not_found: bool,
+    ) -> IO.NodeOutput:
         match = REGEX_ID.search(text)
 
         if not match:
@@ -370,27 +457,19 @@ class ExtractShotID:
                     f"KASKI-Nodes: Couldn't extract ID from: {text}"
                 )
             else:
-                return (text,)
+                return IO.NodeOutput(text)
 
-        return (match.group(0),)
+        return IO.NodeOutput(match.group(0))
 
 
-# MAPPING-DICTS
+# ---------------------------------------------------------------------------
+# V3 registration
+# ---------------------------------------------------------------------------
 
-ID_TOOLS_NODE_CLASS_MAPPINGS = {
-    "GenerateReferenceID_KASKI": GenerateReferenceID,
-    "ExtractReferenceID_KASKI": ExtractReferenceID,
-
-    "ExtractShotID_KASKI": ExtractShotID,
-    "GenerateShotID_KASKI": GenerateShotID,
-    "ModifyShotID_KASKI": ModifyShotID,
-}
-
-ID_TOOLS_NODE_DISPLAY_NAME_MAPPINGS = {
-    "GenerateReferenceID_KASKI": "Generate Reference ID",
-    "ExtractReferenceID_KASKI": "Extract Reference ID",
-
-    "ExtractShotID_KASKI": "Extract Shot ID",
-    "GenerateShotID_KASKI": "Generate Shot ID",
-    "ModifyShotID_KASKI": "Modify Shot ID",
-}
+ID_TOOLS_NODE_LIST = [
+    GenerateReferenceID,
+    ExtractReferenceID,
+    GenerateShotID,
+    ModifyShotID,
+    ExtractShotID,
+]

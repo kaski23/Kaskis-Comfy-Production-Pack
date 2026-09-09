@@ -2,30 +2,53 @@ import re
 
 from comfy_api.latest import IO
 
-### JSON-String-Tools
 
-class JsonStringTool:
+# ---------------------------------------------------------------------------
+# JSON String Tool
+# ---------------------------------------------------------------------------
+
+class JsonStringTool(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "key": ("STRING", {"default": "", "multiline": False}),
-                "value": ("STRING", {"default": "", "multiline": True}),
-                "nested": ("BOOLEAN", {"default": False}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="JsonStringTool_KASKI",
+            display_name="JSON Key-Value String",
+            category="KASKI/stringtools",
+            inputs=[
+                IO.String.Input(
+                    "key",
+                    default="",
+                    multiline=False,
+                ),
+                IO.String.Input(
+                    "value",
+                    default="",
+                    multiline=True,
+                ),
+                IO.Boolean.Input(
+                    "nested",
+                    default=False,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(
+                    display_name="JSON-String",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("JSON-String",)
-    FUNCTION = "create_json_string"
-    CATEGORY = "KASKI/stringtools"
-
-    def create_json_string(self, key, value, nested):
+    @classmethod
+    def execute(
+        cls,
+        key: str,
+        value: str,
+        nested: bool,
+    ) -> IO.NodeOutput:
         key = key.strip().strip('"').rstrip(":").strip()
         value = value.strip()
 
         if not key:
-            return ("",)
+            return IO.NodeOutput("")
 
         # Value absichern
         if not value:
@@ -47,40 +70,68 @@ class JsonStringTool:
 
         json_string = f'"{key}": {value},\n'
 
-        return (json_string,)
+        return IO.NodeOutput(json_string)
 
 
+# ---------------------------------------------------------------------------
+# String Split at Symbol
+# ---------------------------------------------------------------------------
 
-### GENERAL STRING TOOLS
-
-
-class StringSplitAtSymbol:
+class StringSplitAtSymbol(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"multiline": False}),
-                "delimiter": ("STRING", {"default": "_"}),
-                "index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="StringSplitAtSymbol_KASKI",
+            display_name="String Split at Symbol",
+            category="KASKI/stringtools",
+            inputs=[
+                IO.String.Input(
+                    "text",
+                    multiline=False,
+                ),
+                IO.String.Input(
+                    "delimiter",
+                    default="_",
+                ),
+                IO.Int.Input(
+                    "index",
+                    default=0,
+                    min=0,
+                    max=1000,
+                    step=1,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(
+                    display_name="selected string",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("selected string",)
-    FUNCTION = "split_and_select"
-    CATEGORY = "KASKI/stringtools"
-
-    def split_and_select(self, text: str, delimiter: str, index: int):
+    @classmethod
+    def execute(
+        cls,
+        text: str,
+        delimiter: str,
+        index: int,
+    ) -> IO.NodeOutput:
         if not delimiter:
-            raise ValueError(f"KASKI-Nodes: no delimiter specified")   # if no delimiter is specified, kill the whole thing
+            raise ValueError(
+                "KASKI-Nodes: no delimiter specified"
+            )
 
         parts = text.split(delimiter)
-        if 0 <= index < len(parts):
-            return (parts[index],)
-        else:
-            return ("",)
 
-           
+        if 0 <= index < len(parts):
+            return IO.NodeOutput(parts[index])
+
+        return IO.NodeOutput("")
+
+
+# ---------------------------------------------------------------------------
+# Join Strings
+# ---------------------------------------------------------------------------
+
 class JoinStrings(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -126,57 +177,81 @@ class JoinStrings(IO.ComfyNode):
             if value is not None
         ]
 
-        return IO.NodeOutput(delimiter.join(values))
+        return IO.NodeOutput(
+            delimiter.join(values)
+        )
 
-class NumberToString:
+
+# ---------------------------------------------------------------------------
+# Number to String
+# ---------------------------------------------------------------------------
+
+class NumberToString(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "number_int": ("INT",),
-                "number_float": ("FLOAT",),
-                "mode": (["INT", "FLOAT"],),
-                "zero_padding": ("INT", {"default": 0, "min": 0, "max": 15, "step": 1}),
-                "decimal_places": ("INT", {"default": 2, "min": 0, "max": 10, "step": 1}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="NumberToString_KASKI",
+            display_name="Number to String",
+            category="KASKI/stringtools",
+            inputs=[
+                IO.Int.Input(
+                    "number_int",
+                ),
+                IO.Float.Input(
+                    "number_float",
+                ),
+                IO.Combo.Input(
+                    "mode",
+                    options=["INT", "FLOAT"],
+                ),
+                IO.Int.Input(
+                    "zero_padding",
+                    default=0,
+                    min=0,
+                    max=15,
+                    step=1,
+                ),
+                IO.Int.Input(
+                    "decimal_places",
+                    default=2,
+                    min=0,
+                    max=10,
+                    step=1,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(
+                    display_name="string",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("string",)
-    FUNCTION = "convert"
-    CATEGORY = "KASKI/stringtools"
-
-    def convert(
-        self,
+    @classmethod
+    def execute(
+        cls,
         number_int: int,
         number_float: float,
         mode: str,
         zero_padding: int,
         decimal_places: int,
-    ):
+    ) -> IO.NodeOutput:
         if mode == "INT":
             out = f"{number_int:0{zero_padding}d}"
         else:
-            out = f"{number_float:0{zero_padding}.{decimal_places}f}"
+            out = (
+                f"{number_float:0{zero_padding}.{decimal_places}f}"
+            )
 
-        return (out,)
+        return IO.NodeOutput(out)
 
 
+# ---------------------------------------------------------------------------
+# V3 registration
+# ---------------------------------------------------------------------------
 
-# MAPPING-DICTS
-
-STRING_TOOLS_NODE_CLASS_MAPPINGS = {
-    "JsonStringTool_KASKI": JsonStringTool,
-
-    "StringSplitAtSymbol_KASKI": StringSplitAtSymbol,
-    "JoinStrings_KASKI": JoinStrings,
-    "NumberToString_KASKI": NumberToString,
-}
-    
-STRING_TOOLS_NODE_DISPLAY_NAME_MAPPINGS = {
-    "JsonStringTool_KASKI": "JSON Key-Value String",
-
-    "StringSplitAtSymbol_KASKI": "String Split at Symbol",
-    "JoinStrings_KASKI": "Join Strings",
-    "NumberToString_KASKI": "Number to String",
-}
+STRING_TOOLS_NODES_LIST = [
+    JsonStringTool,
+    StringSplitAtSymbol,
+    JoinStrings,
+    NumberToString,
+]

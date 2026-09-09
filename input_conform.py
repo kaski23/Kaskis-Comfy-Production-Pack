@@ -1,17 +1,16 @@
-import math
-
-import torch
-import torch.nn.functional as F
-from comfy.comfy_types import ComfyNodeABC
-
 
 import math
 
 import torch
-from comfy.comfy_types import ComfyNodeABC
+
+from comfy_api.latest import IO
 
 
-class MinMaxSize(ComfyNodeABC):
+# ---------------------------------------------------------------------------
+# Min / Max Size
+# ---------------------------------------------------------------------------
+
+class MinMaxSize(IO.ComfyNode):
     """
     Calculates an optimal output canvas size from minimum and maximum
     resolution constraints without modifying the input image.
@@ -28,53 +27,67 @@ class MinMaxSize(ComfyNodeABC):
     """
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE", {"tooltip": "Input image or image sequence used to determine the optimal output size."}),
-
-                "min_width": (
-                    "INT",
-                    {"default": 720, "min": 0, "max": 8192, "tooltip": "Minimum allowed output width. Set to 0 to disable this constraint."},
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="MinMaxSize_KASKI",
+            display_name="Min/Max Size",
+            category="KASKI/InputConform",
+            inputs=[
+                IO.Image.Input(
+                    "image",
+                    tooltip="Input image or image sequence used to determine the optimal output size.",
                 ),
-                "min_height": (
-                    "INT",
-                    {"default": 720, "min": 0, "max": 8192, "tooltip": "Minimum allowed output height. Set to 0 to disable this constraint."},
+                IO.Int.Input(
+                    "min_width",
+                    default=720,
+                    min=0,
+                    max=8192,
+                    tooltip="Minimum allowed output width. Set to 0 to disable this constraint.",
                 ),
-
-                "max_width": (
-                    "INT",
-                    {"default": 1920, "min": 0, "max": 8192, "tooltip": "Maximum allowed output width. Set to 0 to disable this constraint."},
+                IO.Int.Input(
+                    "min_height",
+                    default=720,
+                    min=0,
+                    max=8192,
+                    tooltip="Minimum allowed output height. Set to 0 to disable this constraint.",
                 ),
-                "max_height": (
-                    "INT",
-                    {"default": 1920, "min": 0, "max": 8192, "tooltip": "Maximum allowed output height. Set to 0 to disable this constraint."},
+                IO.Int.Input(
+                    "max_width",
+                    default=1920,
+                    min=0,
+                    max=8192,
+                    tooltip="Maximum allowed output width. Set to 0 to disable this constraint.",
                 ),
-            }
-        }
+                IO.Int.Input(
+                    "max_height",
+                    default=1920,
+                    min=0,
+                    max=8192,
+                    tooltip="Maximum allowed output height. Set to 0 to disable this constraint.",
+                ),
+            ],
+            outputs=[
+                IO.Int.Output(
+                    display_name="optimal_width",
+                    tooltip="Recommended output width within the specified size constraints.",
+                ),
+                IO.Int.Output(
+                    display_name="optimal_height",
+                    tooltip="Recommended output height within the specified size constraints.",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = ("INT", "INT")
-    RETURN_NAMES = ("optimal_width", "optimal_height")
-    OUTPUT_TOOLTIPS = (
-        "Recommended output width within the specified size constraints.",
-        "Recommended output height within the specified size constraints.",
-    )
-
-    FUNCTION = "calculate"
-    CATEGORY = "KASKI/InputConform"
-
-
-    def calculate(
-        self,
+    @classmethod
+    def execute(
+        cls,
         image: torch.Tensor,
         min_width: int,
         min_height: int,
         max_width: int,
         max_height: int,
-    ):
+    ) -> IO.NodeOutput:
         """
-        Main node entry point.
-
         Determines the optimal final canvas resolution based on the
         dimensions of the input IMAGE batch.
 
@@ -92,13 +105,13 @@ class MinMaxSize(ComfyNodeABC):
                 "IMAGE batch contains no images."
             )
 
-        self._validate_bounds(
+        cls._validate_bounds(
             min_width,
             max_width,
             "width",
         )
 
-        self._validate_bounds(
+        cls._validate_bounds(
             min_height,
             max_height,
             "height",
@@ -123,14 +136,11 @@ class MinMaxSize(ComfyNodeABC):
         # If the source already lies inside all active bounds,
         # there is no reason to change its resolution.
         if not needs_upscale and not needs_downscale:
-            return (
-                width,
-                height,
-            )
+            return IO.NodeOutput(width, height)
 
         # Minimum proportional scale required to satisfy all
         # active minimum dimensions.
-        min_scale = self._get_min_scale(
+        min_scale = cls._get_min_scale(
             width,
             height,
             min_width,
@@ -139,7 +149,7 @@ class MinMaxSize(ComfyNodeABC):
 
         # Maximum proportional scale allowed before exceeding
         # any active maximum dimension.
-        max_scale = self._get_max_scale(
+        max_scale = cls._get_max_scale(
             width,
             height,
             max_width,
@@ -160,7 +170,7 @@ class MinMaxSize(ComfyNodeABC):
                 scale = 1.0
 
             optimal_width, optimal_height = (
-                self._get_scaled_dimensions(
+                cls._get_scaled_dimensions(
                     width,
                     height,
                     scale,
@@ -171,7 +181,6 @@ class MinMaxSize(ComfyNodeABC):
             # No proportional scale can satisfy all constraints.
             #
             # Example:
-            #
             # Source:      2000 x 500
             # Min height:   720
             # Max width:   1920
@@ -186,7 +195,7 @@ class MinMaxSize(ComfyNodeABC):
             scale = max_scale
 
             scaled_width, scaled_height = (
-                self._get_scaled_dimensions(
+                cls._get_scaled_dimensions(
                     width,
                     height,
                     scale,
@@ -212,7 +221,6 @@ class MinMaxSize(ComfyNodeABC):
                 )
 
         # Final safety clamp against enabled maximum constraints.
-        #
         # This mainly protects against integer rounding around the
         # calculated proportional scale.
         if max_width > 0:
@@ -227,11 +235,10 @@ class MinMaxSize(ComfyNodeABC):
                 max_height,
             )
 
-        return (
+        return IO.NodeOutput(
             int(optimal_width),
             int(optimal_height),
         )
-
 
     @staticmethod
     def _validate_bounds(
@@ -260,7 +267,6 @@ class MinMaxSize(ComfyNodeABC):
                 f"{axis_name}: minimum ({minimum}) cannot exceed "
                 f"maximum ({maximum})."
             )
-
 
     @staticmethod
     def _get_min_scale(
@@ -293,7 +299,6 @@ class MinMaxSize(ComfyNodeABC):
 
         return scale
 
-
     @staticmethod
     def _get_max_scale(
         width: int,
@@ -323,7 +328,6 @@ class MinMaxSize(ComfyNodeABC):
             )
 
         return scale
-
 
     @staticmethod
     def _get_scaled_dimensions(
@@ -384,8 +388,11 @@ class MinMaxSize(ComfyNodeABC):
         )
 
 
+# ---------------------------------------------------------------------------
+# Align Frames to Seconds
+# ---------------------------------------------------------------------------
 
-class AlignFramesToSeconds(ComfyNodeABC):
+class AlignFramesToSeconds(IO.ComfyNode):
     """
     Aligns a frame count to the next full second at a given frame rate.
 
@@ -394,51 +401,49 @@ class AlignFramesToSeconds(ComfyNodeABC):
     """
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "n_frames": (
-                    "INT",
-                    {
-                        "default": 25,
-                        "min": 1,
-                        "max": 999999,
-                        "tooltip": "Number of frames in the source sequence.",
-                    },
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="AlignFramesToSeconds_KASKI",
+            display_name="Align Frames to Seconds",
+            category="KASKI/InputConform",
+            inputs=[
+                IO.Int.Input(
+                    "n_frames",
+                    default=25,
+                    min=1,
+                    max=999999,
+                    tooltip="Number of frames in the source sequence.",
                 ),
-                "fps": (
-                    "FLOAT",
-                    {
-                        "default": 24.0,
-                        "min": 1.0,
-                        "max": 240.0,
-                        "tooltip": "Frame rate used to align the sequence length to a whole number of seconds.",
-                    },
+                IO.Float.Input(
+                    "fps",
+                    default=24.0,
+                    min=1.0,
+                    max=240.0,
+                    tooltip="Frame rate used to align the sequence length to a whole number of seconds.",
                 ),
-            }
-        }
+            ],
+            outputs=[
+                IO.Int.Output(
+                    display_name="frames_to_lengthen_to",
+                    tooltip="Smallest frame count that covers the calculated whole-second duration.",
+                ),
+                IO.Int.Output(
+                    display_name="length_in_seconds",
+                    tooltip="Smallest whole-second duration that can contain the source sequence.",
+                ),
+                IO.Float.Output(
+                    display_name="fps",
+                    tooltip="Pass-through of the fps used.",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = ("INT", "INT", "FLOAT")
-    RETURN_NAMES = (
-        "frames_to_lengthen_to",
-        "length_in_seconds",
-        "fps",
-    )
-
-    OUTPUT_TOOLTIPS = (
-        "Smallest frame count that covers the calculated whole-second duration.",
-        "Smallest whole-second duration that can contain the source sequence.",
-        "Pass-through of the fps used.",
-    )
-
-    FUNCTION = "align"
-    CATEGORY = "KASKI/InputConform"
-
-    def align(
-        self,
+    @classmethod
+    def execute(
+        cls,
         n_frames: int,
         fps: float,
-    ):
+    ) -> IO.NodeOutput:
         """
         Calculates the smallest whole-second duration that can contain
         the given number of frames, then calculates the minimum number
@@ -453,14 +458,18 @@ class AlignFramesToSeconds(ComfyNodeABC):
             length_in_seconds * fps
         )
 
-        return (
+        return IO.NodeOutput(
             frames_to_lengthen_to,
             length_in_seconds,
             fps,
         )
-        
 
-class WanVideoOptimals(ComfyNodeABC):
+
+# ---------------------------------------------------------------------------
+# WAN Video Optimals
+# ---------------------------------------------------------------------------
+
+class WanVideoOptimals(IO.ComfyNode):
     """
     Calculates WAN/VACE-compatible target parameters without modifying
     the input video.
@@ -483,40 +492,39 @@ class WanVideoOptimals(ComfyNodeABC):
     )
 
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "video": ("IMAGE", {"tooltip": "Input image sequence used to calculate WAN/VACE-compatible resolution and frame-count targets."}),
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="WanVideoOptimals_KASKI",
+            display_name="WAN Video Optimals",
+            category="KASKI/InputConform",
+            inputs=[
+                IO.Image.Input(
+                    "video",
+                    tooltip="Input image sequence used to calculate WAN/VACE-compatible resolution and frame-count targets.",
+                ),
+            ],
+            outputs=[
+                IO.Int.Output(
+                    display_name="optimal_width",
+                    tooltip="Recommended WAN/VACE target width.",
+                ),
+                IO.Int.Output(
+                    display_name="optimal_height",
+                    tooltip="Recommended WAN/VACE target height.",
+                ),
+                IO.Int.Output(
+                    display_name="optimal_n_frames",
+                    tooltip="Smallest frame count greater than or equal to the input length that satisfies the 4n + 1 requirement.",
+                ),
+            ],
+        )
 
-    RETURN_TYPES = (
-        "INT",
-        "INT",
-        "INT",
-    )
-
-    RETURN_NAMES = (
-        "optimal_width",
-        "optimal_height",
-        "optimal_n_frames",
-    )
-    OUTPUT_TOOLTIPS = (
-        "Recommended WAN/VACE target width.",
-        "Recommended WAN/VACE target height.",
-        "Smallest frame count greater than or equal to the input length that satisfies the 4n + 1 requirement.",
-    )
-
-    FUNCTION = "calculate"
-    CATEGORY = "KASKI/InputConform"
-
-    def calculate(
-        self,
+    @classmethod
+    def execute(
+        cls,
         video: torch.Tensor,
-    ):
+    ) -> IO.NodeOutput:
         """
-        Main node entry point.
-
         Inspects the source dimensions and frame count, then calculates
         suitable WAN/VACE target parameters without touching the video.
         """
@@ -534,19 +542,19 @@ class WanVideoOptimals(ComfyNodeABC):
             )
 
         optimal_width, optimal_height = (
-            self._find_resolution_bucket(
+            cls._find_resolution_bucket(
                 width,
                 height,
             )
         )
 
         optimal_n_frames = (
-            self._next_4n_plus_1(
+            cls._next_4n_plus_1(
                 frame_count
             )
         )
 
-        return (
+        return IO.NodeOutput(
             optimal_width,
             optimal_height,
             optimal_n_frames,
@@ -688,15 +696,12 @@ class WanVideoOptimals(ComfyNodeABC):
         )
 
 
-IOCONFORMER_NODE_CLASS_MAPPINGS = {
-    "MinMaxSize_KASKI": MinMaxSize,
-    "WanVideoOptimals_KASKI": WanVideoOptimals,
-    "AlignFramesToSeconds_KASKI" : AlignFramesToSeconds,
-}
+# ---------------------------------------------------------------------------
+# V3 registration
+# ---------------------------------------------------------------------------
 
-
-IOCONFORMER_NODE_DISPLAY_NAME_MAPPINGS = {
-    "MinMaxSize_KASKI": "Min/Max Size",
-    "WanVideoOptimals_KASKI": "WAN Video Optimals",
-    "AlignFramesToSeconds_KASKI": "Align Frames to Seconds",
-}
+INPUT_CONFORM_NODES_LIST = [
+    MinMaxSize,
+    WanVideoOptimals,
+    AlignFramesToSeconds,
+]

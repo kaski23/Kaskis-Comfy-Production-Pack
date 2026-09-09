@@ -1,21 +1,39 @@
 import asyncio
-from comfy.comfy_types import ComfyNodeABC
 
-class AsyncDelay(ComfyNodeABC):
+from comfy_api.latest import IO
+
+
+class AsyncDelay(IO.ComfyNode):
     @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "image": ("IMAGE", {"tooltip": "The images to preview."}),
-                "delay": ("INT", )
-            }
-        }
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="AsyncDelay_KASKI",
+            display_name="Async Delay",
+            category="KASKI/async",
+            inputs=[
+                IO.Image.Input(
+                    "image",
+                    tooltip="The images to delay.",
+                ),
+                IO.Int.Input(
+                    "delay",
+                    default=1000,
+                    min=0,
+                    step=100,
+                    tooltip="Delay in milliseconds.",
+                ),
+            ],
+            outputs=[
+                IO.Image.Output(),
+            ],
+        )
 
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "run"
-    CATEGORY = "KASKI/async"
-
-    async def run(self, image, delay):
-        delay = max(0, delay) / 1000.0
-        await asyncio.sleep(delay)
-        return (image,)
+    @classmethod
+    async def execute(cls, image, delay):
+        await asyncio.sleep(max(0, delay) / 1000.0)
+        return IO.NodeOutput(image)
+        
+        
+ASYNC_TOOLS_NODE_LIST = [
+    AsyncDelay,
+]

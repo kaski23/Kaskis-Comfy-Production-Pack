@@ -1,42 +1,32 @@
-from .loaders import *
-from .input_conform import IOCONFORMER_NODE_CLASS_MAPPINGS, IOCONFORMER_NODE_DISPLAY_NAME_MAPPINGS
-from .string_tools import STRING_TOOLS_NODE_CLASS_MAPPINGS, STRING_TOOLS_NODE_DISPLAY_NAME_MAPPINGS
-from .id_tools import ID_TOOLS_NODE_CLASS_MAPPINGS, ID_TOOLS_NODE_DISPLAY_NAME_MAPPINGS
-from .unified_image_api import UNIFIED_IMAGE_API_NODE_CLASS_MAPPINGS, UNIFIED_IMAGE_API_NODE_DISPLAY_NAME_MAPPINGS
-from .async_tools import *
-from .nanobanana_pro_rewrite import NANOBANANA_REWRITE_NODE_CLASS_MAPPINGS, NANOBANANA_REWRITE_NODE_DISPLAY_NAME_MAPPINGS
-from .gptimage_rewrite import OPENAI_GPT_IMAGE_REWRITE_NODE_CLASS_MAPPINGS, OPENAI_GPT_IMAGE_REWRITE_NODE_DISPLAY_NAME_MAPPINGS
-from .video_tools import VIDEO_TOOLS_NODE_CLASS_MAPPINGS, VIDEO_TOOLS_NODE_DISPLAY_NAME_MAPPINGS
+from comfy_api.latest import ComfyExtension
+
+from .async_tools import ASYNC_TOOLS_NODE_LIST
+from .id_tools import ID_TOOLS_NODE_LIST
+from .image_saver import IMAGE_SAVER_NODE_LIST
+from .input_conform import INPUT_CONFORM_NODES_LIST
+from .loaders import LOADERS_NODES_LIST
+from .string_tools import STRING_TOOLS_NODES_LIST
+from .unified_image_api import UNIFIED_IMAGEAPI_NODES_LIST
+from .video_tools import VIDEO_TOOLS_NODES_LIST
 
 
-NODE_CLASS_MAPPINGS = {
-    **STRING_TOOLS_NODE_CLASS_MAPPINGS,
-    **ID_TOOLS_NODE_CLASS_MAPPINGS,
-    **NANOBANANA_REWRITE_NODE_CLASS_MAPPINGS,
-    **OPENAI_GPT_IMAGE_REWRITE_NODE_CLASS_MAPPINGS,
-    **IOCONFORMER_NODE_CLASS_MAPPINGS,
-    **UNIFIED_IMAGE_API_NODE_CLASS_MAPPINGS,
-    **VIDEO_TOOLS_NODE_CLASS_MAPPINGS,
-    
-    "LoadVideoWithFilename_KASKI": LoadVideoWithFilename,
-    "LoadImageWithFilename_KASKI": LoadImageWithFilename,
-    
-    "AsyncDelay_KASKI": AsyncDelay,
+# V3-Inits
+class KaskisComfyNodes(ComfyExtension):
+    async def get_node_list(self):
+        print("[KASKI] V3 get_node_list called")
+        return [
+            *ASYNC_TOOLS_NODE_LIST,
+            *ID_TOOLS_NODE_LIST,
+            *IMAGE_SAVER_NODE_LIST,
+            *INPUT_CONFORM_NODES_LIST,
+            *LOADERS_NODES_LIST,
+            *STRING_TOOLS_NODES_LIST,
+            *UNIFIED_IMAGEAPI_NODES_LIST,
+            *VIDEO_TOOLS_NODES_LIST
+            
+        ]
 
-}
+async def comfy_entrypoint():
+    print("[KASKI] V3 comfy_entrypoint called")
+    return KaskisComfyNodes()
 
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    **STRING_TOOLS_NODE_DISPLAY_NAME_MAPPINGS,
-    **ID_TOOLS_NODE_DISPLAY_NAME_MAPPINGS,
-    **NANOBANANA_REWRITE_NODE_DISPLAY_NAME_MAPPINGS,
-    **OPENAI_GPT_IMAGE_REWRITE_NODE_DISPLAY_NAME_MAPPINGS,
-    **IOCONFORMER_NODE_DISPLAY_NAME_MAPPINGS,
-    **UNIFIED_IMAGE_API_NODE_DISPLAY_NAME_MAPPINGS,
-    **VIDEO_TOOLS_NODE_DISPLAY_NAME_MAPPINGS,
-    
-    "LoadVideoWithFilename_KASKI": "Load Video with Filename",
-    "LoadImageWithFilename_KASKI": "Load Image with Filename",
-    
-    "AsyncDelay_KASKI": "Async Delay",
-}

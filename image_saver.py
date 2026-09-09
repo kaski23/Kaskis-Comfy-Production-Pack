@@ -16,6 +16,7 @@ from comfy.cli_args import args
 # ---------------------------------------------------------------------------
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_REFERENCE_IMAGE_CHUNK = b"krFI"
 
 
 def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
@@ -70,6 +71,46 @@ def inject_png_metadata(png_bytes: bytes, metadata: dict) -> bytes:
     )
 
     return png_bytes[:ihdr_end] + chunks + png_bytes[ihdr_end:]
+
+
+def inject_reference_images(
+    png_bytes: bytes,
+    reference_pngs: list[bytes],
+) -> bytes:
+    """
+    Embed reference images as private ancillary PNG chunks immediately
+    before IEND.
+
+    Each krFI chunk contains one complete 8-bit PNG file. Chunk order
+    matches the frame order of the input_images IMAGE batch.
+    """
+    if not reference_pngs:
+        return png_bytes
+
+    if not png_bytes.startswith(_PNG_SIGNATURE):
+        raise ValueError("Invalid PNG data.")
+
+    offset = 8
+
+    while offset + 12 <= len(png_bytes):
+        chunk_start = offset
+        length = struct.unpack(">I", png_bytes[offset:offset + 4])[0]
+        chunk_type = png_bytes[offset + 4:offset + 8]
+        chunk_end = offset + 12 + length
+
+        if chunk_end > len(png_bytes):
+            raise ValueError("Invalid or truncated PNG chunk stream.")
+
+        if chunk_type == b"IEND":
+            embedded = b"".join(
+                _png_chunk(_REFERENCE_IMAGE_CHUNK, ref_png)
+                for ref_png in reference_pngs
+            )
+            return png_bytes[:chunk_start] + embedded + png_bytes[chunk_start:]
+
+        offset = chunk_end
+
+    raise ValueError("PNG contains no IEND chunk.")
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +244,12 @@ class SavePNGwithMetadata(IO.ComfyNode):
             inputs=[
                 IO.Image.Input("images"),
 
+                IO.Image.Input(
+                    "input_images",
+                    optional=True,
+                    tooltip="Optional IMAGE batch embedded into every saved PNG as 8-bit reference images.",
+                ),
+
                 IO.String.Input(
                     "filename_prefix",
                     default="ComfyUI",
@@ -251,6 +298,7 @@ class SavePNGwithMetadata(IO.ComfyNode):
     def execute(
         cls,
         images,
+        input_images=None,
         filename_prefix="ComfyUI",
         bit_depth="16-bit",
         model_name="",
@@ -268,6 +316,14 @@ class SavePNGwithMetadata(IO.ComfyNode):
             images,
             bit_depth=depth,
         )
+
+        reference_pngs = []
+
+        if input_images is not None and not args.disable_metadata:
+            reference_pngs = tensor_to_png(
+                input_images,
+                bit_depth=8,
+            )
 
         # ---------------------------------------------------------------
         # Output path
@@ -331,6 +387,12 @@ class SavePNGwithMetadata(IO.ComfyNode):
         for batch_number, png_bytes in enumerate(png_list):
             if metadata:
                 png_bytes = inject_png_metadata(png_bytes, metadata)
+
+            if reference_pngs:
+                png_bytes = inject_reference_images(
+                    png_bytes,
+                    reference_pngs,
+                )
 
             name = filename.replace("%batch_num%", str(batch_number))
 

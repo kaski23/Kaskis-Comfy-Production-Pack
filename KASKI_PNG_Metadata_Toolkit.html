@@ -153,6 +153,39 @@
     object-fit: contain;
   }
 
+  .reference-strip {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 12px;
+    background: var(--panel3);
+  }
+
+  .reference-strip.visible { display: block; }
+
+  .reference-strip-title {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 9px;
+  }
+
+  .reference-thumbs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 8px;
+  }
+
+  .reference-thumb {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #0f1115;
+  }
+
   .preview-footer,
   .toolbar {
     display: flex;
@@ -442,6 +475,11 @@
           <img id="preview" alt="PNG preview">
         </div>
 
+        <div id="referenceStrip" class="reference-strip">
+          <div id="referenceStripTitle" class="reference-strip-title">References</div>
+          <div id="referenceThumbs" class="reference-thumbs"></div>
+        </div>
+
         <div class="preview-footer">
           <span id="status">Keine Datei geladen</span>
           <label class="button" for="fileInput">PNG öffnen</label>
@@ -512,7 +550,7 @@
         <div class="batch-body">
           <div class="folder-box" id="folderBox">
             <strong>Ordner voller PNGs auswählen</strong>
-            Alle PNGs werden lokal gelesen. Pro Bild entsteht mindestens eine PDF-Seite mit Bild, Dateiname, Modell, Seed und Prompt.
+            Alle PNGs werden lokal gelesen. Pro Bild entsteht eine Dokumentationsseite mit generiertem Bild, eingebetteten Referenzen, Dateiname, Modell, Seed und Prompt.
 
             <div class="folder-actions">
               <label class="button primary" for="folderInput">Ordner wählen</label>
@@ -596,6 +634,7 @@
   const ascii = new TextEncoder();
 
   let currentObjectUrl = null;
+  let currentReferenceUrls = [];
   let batchEntries = [];
 
   // ------------------------------------------------------------------
@@ -726,6 +765,7 @@
     }
 
     const metadata = {};
+    const referenceImages = [];
     let offset = 8;
 
     while (offset + 12 <= bytes.length) {
@@ -757,10 +797,14 @@
         }
       }
 
+      if (type === "krFI") {
+        referenceImages.push(data.slice());
+      }
+
       if (type === "IEND") break;
     }
 
-    return metadata;
+    return { metadata, referenceImages };
   }
 
   function firstValue(metadata, keys) {
@@ -775,9 +819,9 @@
 
   function normalizedMetadata(metadata) {
     return {
-      model: firstValue(metadata, ["model_name", "modelName", "model"]),
-      seed: firstValue(metadata, ["seed"]),
-      prompt: firstValue(metadata, ["user_prompt", "positive_prompt"])
+      model: firstValue(metadata, ["model_name", "modelName", "model"]) || "-- Model Info not in Metadata ---",
+      seed: firstValue(metadata, ["seed"]) || "-- Seed not in Metadata ---",
+      prompt: firstValue(metadata, ["user_prompt", "positive_prompt"]) || "-- Prompt not in Metadata ---"
     };
   }
 
@@ -799,6 +843,38 @@
   const preview = $("preview");
   const placeholder = $("placeholder");
   const status = $("status");
+  const referenceStrip = $("referenceStrip");
+  const referenceStripTitle = $("referenceStripTitle");
+  const referenceThumbs = $("referenceThumbs");
+
+  function clearReferencePreview() {
+    for (const url of currentReferenceUrls) URL.revokeObjectURL(url);
+    currentReferenceUrls = [];
+    referenceThumbs.innerHTML = "";
+    referenceStrip.classList.remove("visible");
+  }
+
+  function renderReferencePreview(referenceImages) {
+    clearReferencePreview();
+
+    if (!referenceImages?.length) return;
+
+    referenceStripTitle.textContent =
+      `References · ${referenceImages.length}`;
+
+    for (const bytes of referenceImages) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      currentReferenceUrls.push(url);
+
+      const img = document.createElement("img");
+      img.className = "reference-thumb";
+      img.alt = "Embedded reference";
+      img.src = url;
+      referenceThumbs.appendChild(img);
+    }
+
+    referenceStrip.classList.add("visible");
+  }
 
   async function loadSingleFile(file) {
     if (!file) return;
@@ -814,7 +890,8 @@
 
     try {
       const buffer = await file.arrayBuffer();
-      const metadata = await parsePNGMetadata(buffer);
+      const parsed = await parsePNGMetadata(buffer);
+      const metadata = parsed.metadata;
       const normalized = normalizedMetadata(metadata);
 
       setField("filename", file.name);
@@ -837,9 +914,14 @@
       preview.style.display = "block";
       placeholder.style.display = "none";
 
+      renderReferencePreview(parsed.referenceImages);
+
       const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
+      const refInfo = parsed.referenceImages.length
+        ? ` · ${parsed.referenceImages.length} Referenzbild${parsed.referenceImages.length === 1 ? "" : "er"}`
+        : "";
       status.textContent =
-        `${sizeMiB} MB · ${Object.keys(metadata).length} Text-Metadatenfelder`;
+        `${sizeMiB} MB · ${Object.keys(metadata).length} Text-Metadatenfelder${refInfo}`;
 
     } catch (err) {
       console.error(err);
@@ -964,13 +1046,15 @@
       batchStatus.textContent = `Lese Metadaten ${i + 1}/${pngFiles.length}: ${file.name}`;
 
       try {
-        const metadata = await parsePNGMetadata(await file.arrayBuffer());
+        const parsed = await parsePNGMetadata(await file.arrayBuffer());
+        const metadata = parsed.metadata;
         const normalized = normalizedMetadata(metadata);
 
         batchEntries.push({
           file,
           path: relativeName(file),
           metadata,
+          referenceImages: parsed.referenceImages,
           ...normalized
         });
       } catch (err) {
@@ -979,9 +1063,10 @@
           file,
           path: relativeName(file),
           metadata: {},
-          model: "",
-          seed: "",
-          prompt: ""
+          referenceImages: [],
+          model: "-- Model Info not in Metadata ---",
+          seed: "-- Seed not in Metadata ---",
+          prompt: "-- Prompt not in Metadata ---"
         });
       }
 
@@ -1017,9 +1102,9 @@
         <tr>
           <td class="muted">${i + 1}</td>
           <td>${escapeHTML(entry.path)}</td>
-          <td>${escapeHTML(entry.model || "—")}</td>
-          <td>${escapeHTML(entry.seed || "—")}</td>
-          <td class="prompt-cell">${escapeHTML(preview || "—")}</td>
+          <td>${escapeHTML(entry.model)}</td>
+          <td>${escapeHTML(entry.seed)}</td>
+          <td class="prompt-cell">${escapeHTML(preview)}</td>
         </tr>
       `;
     }).join("");
@@ -1057,6 +1142,24 @@
 
       img.src = url;
     });
+  }
+
+  async function loadEmbeddedBitmap(bytes) {
+    return loadBitmap(new Blob([bytes], { type: "image/png" }));
+  }
+
+  async function loadReferenceBitmaps(referenceImages) {
+    const bitmaps = [];
+
+    for (const bytes of referenceImages || []) {
+      try {
+        bitmaps.push(await loadEmbeddedBitmap(bytes));
+      } catch (err) {
+        console.warn("Embedded reference image could not be decoded:", err);
+      }
+    }
+
+    return bitmaps;
   }
 
   function bitmapDimensions(bitmap) {
@@ -1155,7 +1258,7 @@
     ctx.font = "24px Arial, Helvetica, sans-serif";
     ctx.fillStyle = "#111111";
 
-    const lines = wrapText(ctx, value || "—", maxWidth);
+    const lines = wrapText(ctx, value, maxWidth);
     const lineHeight = 32;
     let cy = y + 30;
 
@@ -1172,8 +1275,8 @@
     ctx.font = "600 30px Arial, Helvetica, sans-serif";
 
     const title = continuation
-      ? `${entry.path} — Prompt continued`
-      : entry.path;
+      ? `${entry.file.name} — Prompt continued`
+      : entry.file.name;
 
     const titleLines = wrapText(ctx, title, CONTENT_W);
     let y = MARGIN;
@@ -1193,9 +1296,48 @@
     return y + 34;
   }
 
+  function drawReferenceGrid(ctx, bitmaps, top, height) {
+    if (!bitmaps.length || height <= 0) return top;
+
+    ctx.font = "600 21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#777777";
+    ctx.fillText(`REFERENCES · ${bitmaps.length}`, MARGIN, top);
+
+    const gridTop = top + 34;
+    const gridHeight = Math.max(1, height - 34);
+    const gap = 12;
+    const columns = Math.min(6, Math.max(1, bitmaps.length));
+    const rows = Math.ceil(bitmaps.length / columns);
+    const cellW = (CONTENT_W - gap * (columns - 1)) / columns;
+    const cellH = (gridHeight - gap * (rows - 1)) / rows;
+
+    for (let i = 0; i < bitmaps.length; i++) {
+      const bitmap = bitmaps[i];
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+      const x = MARGIN + col * (cellW + gap);
+      const y = gridTop + row * (cellH + gap);
+
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(x, y, cellW, cellH);
+
+      const dims = bitmapDimensions(bitmap);
+      const scale = Math.min(cellW / dims.width, cellH / dims.height);
+      const drawW = Math.max(1, dims.width * scale);
+      const drawH = Math.max(1, dims.height * scale);
+      const drawX = x + (cellW - drawW) / 2;
+      const drawY = y + (cellH - drawH) / 2;
+
+      ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
+    }
+
+    return top + height;
+  }
+
   async function renderEntryPages(entry) {
     const pages = [];
     const bitmap = await loadBitmap(entry.file);
+    const referenceBitmaps = await loadReferenceBitmaps(entry.referenceImages);
 
     // Main image page.
     {
@@ -1203,7 +1345,8 @@
       let y = drawHeader(ctx, entry, false);
 
       const imageTop = y;
-      const imageBottom = 1055;
+      const hasReferences = referenceBitmaps.length > 0;
+      const imageBottom = hasReferences ? 820 : 1055;
       const imageBoxH = imageBottom - imageTop;
 
       ctx.fillStyle = "#f2f2f2";
@@ -1222,14 +1365,23 @@
 
       ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
 
-      y = imageBottom + 36;
+      if (hasReferences) {
+        y = drawReferenceGrid(
+          ctx,
+          referenceBitmaps,
+          imageBottom + 28,
+          230
+        ) + 28;
+      } else {
+        y = imageBottom + 36;
+      }
 
       // Model / seed on one row.
       const columnGap = 36;
       const colW = (CONTENT_W - columnGap) / 2;
 
-      drawLabel(ctx, "Model", entry.model || "—", MARGIN, y, colW);
-      drawLabel(ctx, "Seed", entry.seed || "—", MARGIN + colW + columnGap, y, colW);
+      drawLabel(ctx, "Model", entry.model, MARGIN, y, colW);
+      drawLabel(ctx, "Seed", entry.seed, MARGIN + colW + columnGap, y, colW);
 
       y += 100;
 
@@ -1241,7 +1393,7 @@
       ctx.font = "24px Arial, Helvetica, sans-serif";
       ctx.fillStyle = "#111111";
 
-      const promptLines = wrapText(ctx, entry.prompt || "—", CONTENT_W);
+      const promptLines = wrapText(ctx, entry.prompt, CONTENT_W);
       const lineHeight = 32;
       const maxMainLines = Math.max(1, Math.floor((PAGE_H - MARGIN - y) / lineHeight));
       const mainLines = promptLines.slice(0, maxMainLines);
@@ -1283,6 +1435,12 @@
 
     if (typeof bitmap.close === "function") {
       bitmap.close();
+    }
+
+    for (const refBitmap of referenceBitmaps) {
+      if (typeof refBitmap.close === "function") {
+        refBitmap.close();
+      }
     }
 
     return pages;
@@ -1485,6 +1643,7 @@
 
   window.addEventListener("beforeunload", () => {
     if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+    clearReferencePreview();
   });
 })();
 </script>

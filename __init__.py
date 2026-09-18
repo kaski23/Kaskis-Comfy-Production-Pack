@@ -1,4 +1,5 @@
 from comfy_api.latest import ComfyExtension
+from .comfy_patches import apply_comfy_patches
 
 from .async_tools import ASYNC_TOOLS_NODES_LIST
 from .id_tools import ID_TOOLS_NODES_LIST
@@ -11,6 +12,8 @@ from .unified_video_api import UNIFIED_VIDEOAPI_NODES_LIST
 from .video_saver import PRORES_SAVER_NODE_LIST
 from .video_tools import VIDEO_TOOLS_NODES_LIST
 
+#apply patches
+apply_comfy_patches()
 
 # V3-Inits
 class KaskisComfyNodes(ComfyExtension):

@@ -7,6 +7,9 @@ from comfy_api.latest import IO
 # JSON String Tools
 # ---------------------------------------------------------------------------
 
+import json
+
+
 class GenerateDICTfromKV(IO.ComfyNode):
 
     @classmethod
@@ -62,6 +65,48 @@ class GenerateDICTfromKV(IO.ComfyNode):
             ],
         )
 
+    @staticmethod
+    def parse_json_or_string(value: str):
+        value = value.strip()
+
+        if not value:
+            return value
+
+        # 1. Already valid standalone JSON
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            pass
+
+        fragment = value.rstrip(",")
+
+        # 2. JSON key-value fragment -> DICT
+        try:
+            parsed = json.loads(
+                "{\n" + fragment + "\n}"
+            )
+
+            if isinstance(parsed, dict):
+                return parsed
+
+        except json.JSONDecodeError:
+            pass
+
+        # 3. JSON value fragment -> LIST
+        try:
+            parsed = json.loads(
+                "[\n" + fragment + "\n]"
+            )
+
+            if isinstance(parsed, list):
+                return parsed
+
+        except json.JSONDecodeError:
+            pass
+
+        # 4. Normal string
+        return value
+
     @classmethod
     def execute(
         cls,
@@ -83,8 +128,10 @@ class GenerateDICTfromKV(IO.ComfyNode):
         if mode == "STRING":
             value = value_type["value"]
 
+            parsed_value = cls.parse_json_or_string(value)
+
             return IO.NodeOutput({
-                key: value
+                key: parsed_value
             })
 
         # --------------------------------------------------

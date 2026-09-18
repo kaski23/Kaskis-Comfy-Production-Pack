@@ -552,12 +552,22 @@ def write_temp_ffmetadata(metadata: dict[str, str]) -> Path | None:
     path = Path(metadata_path)
 
     lines = [";FFMETADATA1"]
+
     for key, value in metadata.items():
         lines.append(
             f"{_escape_ffmetadata(str(key))}={_escape_ffmetadata(str(value))}"
         )
 
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # IMPORTANT:
+    # FFmetadata multiline escaping requires literal LF line endings.
+    # Do not let Windows convert them to CRLF.
+    with path.open(
+        "w",
+        encoding="utf-8",
+        newline="\n",
+    ) as file:
+        file.write("\n".join(lines) + "\n")
+
     return path
 
 

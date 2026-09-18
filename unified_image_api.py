@@ -337,7 +337,7 @@ class KASKIImageAPISettings(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="ImageAPISettings_KASKI",
-            display_name="KASKI Image API Settings",
+            display_name="KASKI Unified Image API Settings",
             category=CATEGORY,
             description=(
                 "Shared settings for ComfyUI's built-in image API nodes. "
@@ -495,7 +495,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="ImageAPIGenerator_KASKI",
-            display_name="KASKI Image API Generator",
+            display_name="KASKI Unified Image API",
             category=CATEGORY,
             description=(
                 "Thin router over ComfyUI's built-in OpenAI, Gemini, Seedream "

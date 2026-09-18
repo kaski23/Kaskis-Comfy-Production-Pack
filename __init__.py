@@ -7,6 +7,7 @@ from .input_conform import INPUT_CONFORM_NODES_LIST
 from .loaders import LOADERS_NODES_LIST
 from .string_tools import STRING_TOOLS_NODES_LIST
 from .unified_image_api import UNIFIED_IMAGEAPI_NODES_LIST
+from .unified_video_api import UNIFIED_VIDEOAPI_NODES_LIST
 from .video_saver import PRORES_SAVER_NODE_LIST
 from .video_tools import VIDEO_TOOLS_NODES_LIST
 
@@ -14,7 +15,6 @@ from .video_tools import VIDEO_TOOLS_NODES_LIST
 # V3-Inits
 class KaskisComfyNodes(ComfyExtension):
     async def get_node_list(self):
-        print("[KASKI] V3 get_node_list called")
         return [
             *ASYNC_TOOLS_NODES_LIST,
             *ID_TOOLS_NODES_LIST,
@@ -23,12 +23,10 @@ class KaskisComfyNodes(ComfyExtension):
             *LOADERS_NODES_LIST,
             *STRING_TOOLS_NODES_LIST,
             *UNIFIED_IMAGEAPI_NODES_LIST,
+            *UNIFIED_VIDEOAPI_NODES_LIST,
             *PRORES_SAVER_NODE_LIST,
             *VIDEO_TOOLS_NODES_LIST
-            
         ]
 
 async def comfy_entrypoint():
-    print("[KASKI] V3 comfy_entrypoint called")
     return KaskisComfyNodes()
-

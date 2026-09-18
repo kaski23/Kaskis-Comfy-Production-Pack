@@ -863,7 +863,7 @@ class SaveProRes(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="KASKI_SaveProRes",
-            display_name="Save ProRes",
+            display_name="Save Video as ProRes",
             description=(
                 "Saves an IMAGE batch as a ProRes MOV. Video is fed to FFmpeg as "
                 "16-bit RGB(A), encoded to at least 10-bit ProRes, and optional "

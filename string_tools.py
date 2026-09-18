@@ -16,7 +16,7 @@ class GenerateDICTfromKV(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="GenerateDICTfromKV_KASKI",
-            display_name="Generate DICT from Key-Value-Pair",
+            display_name="Generate DICT from Key-Value-Pair (JSON-Tools)",
             category="KASKI/jsontools",
 
             inputs=[
@@ -160,7 +160,7 @@ class GenerateJSONfromDICT(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="GenerateJSONfromDICT_KASKI",
-            display_name="Generate JSON from DICT",
+            display_name="Generate JSON from DICT (JSON-Tools)",
             category="KASKI/jsontools",
             inputs=[
                 IO.Dict.Input(
@@ -211,7 +211,7 @@ class JsonStringTool(IO.ComfyNode):
     def define_schema(cls):
         return IO.Schema(
             node_id="JsonStringTool_KASKI",
-            display_name="JSON Key-Value String",
+            display_name="JSON Key-Value String (LEGACY)",
             category="KASKI/stringtools",
             inputs=[
                 IO.String.Input(

@@ -659,9 +659,3 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 "",
                 "",
             )
-
-
-UNIFIED_IMAGEAPI_NODES_LIST = [
-    KASKIImageAPISettings,
-    KASKIImageAPIGenerator,
-]

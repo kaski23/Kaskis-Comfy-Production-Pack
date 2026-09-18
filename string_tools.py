@@ -1,10 +1,162 @@
 import re
+import json
 
 from comfy_api.latest import IO
 
+# ---------------------------------------------------------------------------
+# JSON String Tools
+# ---------------------------------------------------------------------------
+
+class GenerateDICTfromKV(IO.ComfyNode):
+
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="GenerateDICTfromKV_KASKI",
+            display_name="Generate DICT from Key-Value-Pair",
+            category="KASKI/jsontools",
+
+            inputs=[
+                IO.String.Input(
+                    "key",
+                    default="",
+                    multiline=False,
+                ),
+
+                IO.DynamicCombo.Input(
+                    "value_type",
+                    options=[
+                        IO.DynamicCombo.Option(
+                            "STRING",
+                            [
+                                IO.String.Input(
+                                    "value",
+                                    default="",
+                                    multiline=True,
+                                ),
+                            ],
+                        ),
+
+                        IO.DynamicCombo.Option(
+                            "DICT",
+                            [
+                                IO.Autogrow.Input(
+                                    "dicts",
+                                    template=IO.Autogrow.TemplatePrefix(
+                                        IO.Dict.Input("dict"),
+                                        prefix="dict",
+                                        min=1,
+                                        max=64,
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+
+            outputs=[
+                IO.Dict.Output(
+                    display_name="KeyValue-Dict",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        key: str,
+        value_type: dict,
+    ) -> IO.NodeOutput:
+
+        key = key.strip()
+
+        if not key:
+            return IO.NodeOutput({})
+
+        mode = value_type["value_type"]
+
+        # --------------------------------------------------
+        # STRING MODE
+        # --------------------------------------------------
+
+        if mode == "STRING":
+            value = value_type["value"]
+
+            return IO.NodeOutput({
+                key: value
+            })
+
+        # --------------------------------------------------
+        # DICT MODE
+        # --------------------------------------------------
+
+        if mode == "DICT":
+            dicts = value_type["dicts"]
+
+            merged_dict = {}
+
+            for current_dict in dicts.values():
+                if current_dict:
+                    merged_dict.update(current_dict)
+
+            return IO.NodeOutput({
+                key: merged_dict
+            })
+
+        return IO.NodeOutput({})
+
+
+class GenerateJSONfromDICT(IO.ComfyNode):
+
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="GenerateJSONfromDICT_KASKI",
+            display_name="Generate JSON from DICT",
+            category="KASKI/jsontools",
+            inputs=[
+                IO.Dict.Input(
+                    "data",
+                ),
+                IO.Boolean.Input(
+                    "pretty",
+                    default=True,
+                ),
+            ],
+            outputs=[
+                IO.String.Output(
+                    display_name="JSON",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        data: dict,
+        pretty: bool,
+    ) -> IO.NodeOutput:
+
+        if data is None:
+            return IO.NodeOutput("")
+
+        json_string = json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2 if pretty else None,
+            separators=None if pretty else (",", ":"),
+        )
+
+        return IO.NodeOutput(json_string)
+
+
+
+
+
 
 # ---------------------------------------------------------------------------
-# JSON String Tool
+# JSON String Tool - LEGACY
 # ---------------------------------------------------------------------------
 
 class JsonStringTool(IO.ComfyNode):
@@ -71,6 +223,9 @@ class JsonStringTool(IO.ComfyNode):
         json_string = f'"{key}": {value},\n'
 
         return IO.NodeOutput(json_string)
+        
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +405,8 @@ class NumberToString(IO.ComfyNode):
 # ---------------------------------------------------------------------------
 
 STRING_TOOLS_NODES_LIST = [
+    GenerateDICTfromKV,
+    GenerateJSONfromDICT,
     JsonStringTool,
     StringSplitAtSymbol,
     JoinStrings,

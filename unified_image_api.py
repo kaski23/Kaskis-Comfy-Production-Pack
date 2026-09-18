@@ -10,7 +10,7 @@ The last three outputs are strings suitable for the KASKI PNG saver.
 The seed is the value passed to the selected Comfy core node, not a promise
 that the remote service implements deterministic generation.
 
-Provider interfaces checked against Comfy-Org/ComfyUI master, 2026-09-09.
+Provider interfaces checked against Comfy-Org/ComfyUI master, 2026-09-16.
 Private upstream widget helpers are intentionally reused rather than forked.
 If a helper or execute signature changes, update this adapter, not the API
 implementation. This module makes no HTTP requests of its own.
@@ -32,7 +32,7 @@ from comfy_api_nodes.apis.bytedance import (
 from comfy_api_nodes.nodes_bfl import Flux2ImageNode, _flux2_model_inputs
 from comfy_api_nodes.nodes_bytedance import (
     SEEDREAM_MODELS,
-    ByteDanceSeedreamNodeV2,
+    ByteDanceSeedreamNodeV3,
     _seedream_model_inputs,
 )
 from comfy_api_nodes.nodes_gemini import (
@@ -42,9 +42,11 @@ from comfy_api_nodes.nodes_gemini import (
     _nano_banana_2_v2_model_inputs,
 )
 from comfy_api_nodes.nodes_openai import (
+    GPT_IMAGE_25_QUALITIES,
+    GPT_IMAGE_QUALITIES,
     OpenAIGPTImageNodeV2,
+    _gpt_image_2_model_inputs,
     _gpt_image_legacy_model_inputs,
-    _gpt_image_shared_inputs,
 )
 
 
@@ -166,13 +168,16 @@ def _normalized_output(
         thought_image = _black_like(image)
     if not isinstance(thought_image, torch.Tensor) or thought_image.ndim != 4:
         raise TypeError("Core thought_image must be a BHWC torch.Tensor.")
+    if seed is None or seed == "":
+        seed = -1
+        
     return IO.NodeOutput(
         image,
         "" if thoughts is None else str(thoughts),
         thought_image,
         str(prompt),
         str(model_name),
-        str(seed),
+        int(seed),
     )
 
 
@@ -189,42 +194,41 @@ def _model_id(provider: str, selected: str) -> str:
 
 
 def _openai_selector() -> Input:
-    quality_only = _without(_gpt_image_shared_inputs(), "images", "mask")
-
     return IO.DynamicCombo.Input(
         "model_settings",
         options=[
             IO.DynamicCombo.Option(
+                "gpt-image-2.5-flare",
+                _without(
+                    _gpt_image_2_model_inputs(
+                        ("auto", "opaque", "transparent"),
+                        GPT_IMAGE_25_QUALITIES,
+                    ),
+                    "images",
+                    "mask",
+                ),
+            ),
+            IO.DynamicCombo.Option(
+                "gpt-image-2.5-sunburst",
+                _without(
+                    _gpt_image_2_model_inputs(
+                        ("auto", "opaque", "transparent"),
+                        GPT_IMAGE_25_QUALITIES,
+                    ),
+                    "images",
+                    "mask",
+                ),
+            ),
+            IO.DynamicCombo.Option(
                 "gpt-image-2",
-                [
-                    IO.Combo.Input(
-                        "size",
-                        default="auto",
-                        options=[
-                            "auto", "1024x1024", "1024x1536", "1536x1024",
-                            "2048x2048", "2048x1152", "1152x2048",
-                            "3840x2160", "2160x3840", "Custom",
-                        ],
+                _without(
+                    _gpt_image_2_model_inputs(
+                        ("auto", "opaque"),
+                        GPT_IMAGE_QUALITIES,
                     ),
-                    IO.Int.Input(
-                        "custom_width", default=1024, min=1024, max=3840, step=16,
-                    ),
-                    IO.Int.Input(
-                        "custom_height", default=1024, min=1024, max=3840, step=16,
-                    ),
-                    IO.Combo.Input(
-                        "background", default="auto", options=["auto", "opaque"],
-                    ),
-                    *quality_only,
-                ],
-            ),
-            IO.DynamicCombo.Option(
-                "gpt-image-1.5",
-                _without(_gpt_image_legacy_model_inputs(), "images", "mask"),
-            ),
-            IO.DynamicCombo.Option(
-                "gpt-image-1",
-                _without(_gpt_image_legacy_model_inputs(), "images", "mask"),
+                    "images",
+                    "mask",
+                ),
             ),
         ],
     )
@@ -267,7 +271,7 @@ def _gemini_selector() -> Input:
                     IO.Combo.Input(
                         "resolution",
                         options=["1K", "2K", "4K"],
-                        default="1K",
+                        default="2K",
                     ),
                 ],
             ),
@@ -285,6 +289,7 @@ def _seedream_selector() -> Input:
             max_width=3136,
             max_height=2496,
             supports_batch=False,
+            supports_fast=True,
         ),
         "images",
     )
@@ -408,7 +413,7 @@ class KASKIImageAPISettings(IO.ComfyNode):
                 "background": ms["background"],
                 "quality": ms["quality"],
             }
-            if model_name == "gpt-image-2":
+            if "custom_width" in ms and "custom_height" in ms:
                 model |= {
                     "custom_width": int(ms["custom_width"]),
                     "custom_height": int(ms["custom_height"]),
@@ -453,7 +458,9 @@ class KASKIImageAPISettings(IO.ComfyNode):
                 "width": int(ms["width"]),
                 "height": int(ms["height"]),
             }
-            if model_name == "seedream 5.0 lite":
+            if model_name == "seedream 5.0 pro":
+                model["prompt_optimization"] = ms.get("prompt_optimization", "standard")
+            elif model_name == "seedream 5.0 lite":
                 model |= {
                     "max_images": int(ms.get("max_images", 1)),
                     "fail_on_partial": bool(ms.get("fail_on_partial", False)),
@@ -501,7 +508,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     "seed",
                     default=0,
                     min=0,
-                    max=0x7FFFFFFFFFFFFFFF,
+                    max=0xFFFFFFFFFFFFFFFF,
                     step=1,
                     control_after_generate=True,
                     display_mode=IO.NumberDisplay.number,
@@ -543,7 +550,8 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
             provider = settings["provider"]
             selected_model = settings["model"]["model"]
             model_name = _model_id(provider, selected_model)
-            effective_seed = int(seed) % 65536
+            effective_seed = int(seed) % (2**31)
+
             image_group = _image_group(images)
 
             if provider == PROVIDER_OPENAI:
@@ -607,7 +615,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 model = dict(settings["model"])
                 model["images"] = image_group
                 out = await _run_core(
-                    ByteDanceSeedreamNodeV2,
+                    ByteDanceSeedreamNodeV3,
                     cls,
                     prompt=prompt,
                     model=model,

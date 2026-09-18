@@ -1,29 +1,8 @@
 # KASKI Nodes
 
-A compact collection of production-oriented custom nodes for [ComfyUI](https://github.com/Comfy-Org/ComfyUI).
+Production-oriented custom nodes for [ComfyUI](https://github.com/Comfy-Org/ComfyUI), focused on practical AI/VFX workflows: API image generation, production naming, filename-aware loading, metadata-safe saving, video conformation, JSON assembly and small workflow utilities.
 
-KASKI Nodes is built around the less glamorous parts of real AI/VFX production: predictable naming, filename-aware loading, reusable API configuration, generation metadata, video conformation, temporal utilities, and small workflow primitives.
-
-> Built for production pipelines rather than one-off demo workflows.
-
-## Highlights
-
-- Fully migrated to ComfyUI's current **V3 node API**
-- Unified image API routing for **OpenAI GPT Image, Google Gemini / Nano Banana, ByteDance Seedream and Black Forest Labs FLUX.2**
-- Reusable API settings that can feed multiple generators
-- Production naming tools for shots and reusable reference assets
-- Filename-aware image and video loading
-- 8-bit / 16-bit PNG saving with ComfyUI workflow metadata, generation metadata and optional embedded reference images
-- WAN/VACE resolution and frame-count helpers
-- Video extension, shortening and temporal smoothing
-- Autogrowing string assembly
-- Small workflow utilities such as JSON fragments, number formatting and asynchronous delay
-- ProRes MOV saving with audio retiming, optional alpha and production metadata
-- Standalone browser-based PNG / MOV metadata inspector and documentation-PDF generator
-
-All ComfyUI nodes are grouped below the `KASKI` category.
-
----
+All nodes are available below the `KASKI` category.
 
 ## Installation
 
@@ -31,117 +10,80 @@ Clone the repository into your ComfyUI `custom_nodes` directory:
 
 ```bash
 cd ComfyUI/custom_nodes
-git clone <repository-url> KASKI-Nodes
+git clone https://github.com/kaski23/Kaskis_Comfy_Nodes_v2.git
 ```
 
 Then restart ComfyUI.
 
-You can also download the repository as a ZIP and extract it to:
+A recent ComfyUI build is recommended. API nodes use ComfyUI's current V3 API and built-in provider infrastructure.
 
-```text
-ComfyUI/custom_nodes/KASKI-Nodes
+### FFmpeg
+
+`Save ProRes` requires FFmpeg with ProRes support. `imageio-ffmpeg` can be used as a packaged FFmpeg source:
+
+```bash
+pip install imageio-ffmpeg
 ```
 
-### Requirements
-
-KASKI Nodes targets recent ComfyUI builds and uses current interfaces including:
-
-- `comfy_api.latest`
-- `comfy_api_nodes`
-- V3 `IO.Schema`
-- dynamic inputs
-- autogrowing inputs
-- ComfyUI's API-node authentication and proxy infrastructure
-
-A current ComfyUI installation is strongly recommended.
-
-Local utility nodes do not require external services. API generation requires the corresponding provider access to be configured through ComfyUI.
-
-### ProRes / FFmpeg
-
-The ProRes saver requires an FFmpeg build with ProRes support. KASKI resolves an available FFmpeg executable at runtime and can use `imageio-ffmpeg` as a convenient packaged source.
-
-Recommended Python dependency:
-
-```text
-imageio-ffmpeg
-```
-
-A system FFmpeg installation may also be used, depending on the resolver configuration in `prores_saver.py`.
+A compatible system FFmpeg installation can also be used.
 
 ---
 
 # Nodes
 
-## Unified Image API
+## Image API
 
-Category:
-
-```text
-KASKI/api-adaptions/image
-```
-
-The unified image API is intentionally a thin adapter over ComfyUI's built-in provider nodes.
-
-KASKI owns the shared settings, routing and normalized outputs. Authentication, uploads, request execution, validation and response decoding remain inside `comfy_api_nodes`.
-
-This keeps the KASKI layer small while still providing a common production interface across providers.
+Category: `KASKI/api-adaptions/image`
 
 ### KASKI Image API Settings
 
-Creates a reusable settings object for the selected image backend.
+**Problem:** Provider-specific image nodes expose different settings, making it cumbersome to switch models or keep several generator branches configured consistently.
 
-Supported providers:
+Creates one reusable settings object for the KASKI image generator. The visible controls change automatically with the selected backend and model.
+
+Supported backends currently include:
 
 - OpenAI GPT Image
+  - `gpt-image-2.5-flare`
+  - `gpt-image-2.5-sunburst`
+  - `gpt-image-2`
 - Google Gemini / Nano Banana
+  - Gemini 3 Pro Image
+  - Nano Banana 2
+  - Nano Banana 2 Lite
 - ByteDance Seedream
+  - Seedream 5.0 Pro
+  - Seedream 5.0 Lite
 - Black Forest Labs FLUX.2
+  - Flux.2 Pro
+  - Flux.2 Max
 
-Available settings depend on the selected provider and model.
+Features:
 
-Current model families include:
-
-**OpenAI**
-
-- `gpt-image-2`
-- `gpt-image-1.5`
-- `gpt-image-1`
-
-**Gemini**
-
-- Gemini 3 Pro Image
-- Nano Banana 2 / Gemini 3.1 Flash Image
-- Nano Banana 2 Lite
-
-**Seedream**
-
-- Seedream 5.0 Pro
-- Seedream 5.0 Lite
-
-**FLUX.2**
-
-- Flux.2 Pro
-- Flux.2 Max
-
-A single settings node can be connected to several generator nodes so model configuration stays synchronized across a workflow.
+- Dynamic model-specific controls
+- One settings output can feed multiple generator nodes
+- Shared Gemini system prompt
+- OpenAI multi-image output count
+- Gemini response modality controls
+- Seedream watermark and thinking controls
+- Provider execution remains inside ComfyUI's built-in API nodes
 
 ### KASKI Image API Generator
 
-Routes a generation request to the backend selected by the connected settings object.
+**Problem:** Different image providers return different outputs and require different execution paths, which makes provider-independent workflows difficult to build.
 
-Inputs include:
+Routes a request through the backend selected in `KASKI Image API Settings` and normalizes the result.
 
-- prompt
-- settings
-- seed
-- optional IMAGE references
-- optional mask
-- optional compatible Gemini files
+Inputs:
 
-The exact provider behavior remains defined by ComfyUI's built-in API nodes.
+- `prompt`
+- `settings`
+- `seed`
+- optional `images`
+- optional `mask`
+- optional Gemini-compatible `files`
 
-Normalized outputs:
+Outputs:
 
 1. `image`
 2. `thoughts`
@@ -150,249 +92,220 @@ Normalized outputs:
 5. `modelName`
 6. `seed`
 
-The final three outputs are strings intended to connect directly to the KASKI PNG saver.
-
-### Error behavior
-
-The API adapter uses soft error handling.
-
-If provider execution fails:
-
-- the exception and traceback are printed to the ComfyUI console
-- the generator returns a black placeholder image
-- the error is surfaced through the `thoughts` output
-- generation provenance fields are left empty
-
-A black output should therefore be treated as an API failure and checked against the console log.
-
----
-
-## PNG Saver
-
-Category:
-
-```text
-KASKI/savers
-```
-
-### Save PNG with metadata
-
-Saves ComfyUI IMAGE tensors as PNG without applying additional color transforms.
-
 Features:
 
-- 8-bit PNG
-- 16-bit PNG
-- batch saving
-- standard ComfyUI workflow metadata
-- standard ComfyUI execution-prompt metadata
-- optional model name
-- optional user prompt
-- optional generation seed
-- optional IMAGE batch containing the visual references used for generation
-- each connected reference frame is embedded as its own 8-bit PNG inside the saved output PNG
-- standard ComfyUI filename-prefix formatting tokens
+- Text-to-image and reference-image generation
+- IMAGE batches can be used as reference collections where supported
+- Optional masking where supported by the selected provider
+- Gemini file input support
+- Normalized outputs across all supported providers
+- Prompt, model and seed outputs can be connected directly to KASKI saver nodes
 
-Custom metadata keys:
+The `seed` primarily participates in ComfyUI execution/cache behavior. Whether a provider receives or uses a seed depends on its underlying ComfyUI implementation.
 
-```text
-model_name
-user_prompt
-seed
-```
-
-Reference images are stored as private ancillary PNG chunks. This keeps the output image self-contained for documentation without changing the visible image data. If no reference IMAGE batch is connected, no reference-image chunks are written.
-
-ComfyUI's own workflow metadata remains stored using its standard keys.
-
-The saver intentionally performs quantization only. Input pixel values are assumed to already represent the desired display-ready image.
+If an API call fails, the node prints the traceback to the ComfyUI console, returns a black placeholder image and exposes the error through `thoughts`.
 
 ---
 
-## PNG / MOV Metadata Toolkit
+## JSON Tools
 
-The repository also contains a standalone browser utility:
+Category: `KASKI/jsontools`
 
-```text
-KASKI_PNG_Metadata_Toolkit.html
-```
+### Generate DICT from Key-Value-Pair
 
-It runs fully locally and supports both still-image and video documentation.
+**Problem:** Building structured prompts as JSON strings becomes fragile once values themselves contain nested objects, quotes or multiple sub-sections.
 
-The single-file viewer automatically detects whether the dropped file is a PNG or MOV.
+Builds a real Python/ComfyUI `DICT` from one key and either a string value or one or more nested DICTs.
 
-For PNG files it can display:
+Modes:
 
-- saved image
-- model name
-- seed
-- user prompt
-- ComfyUI workflow
-- ComfyUI execution prompt
-- embedded reference images
+#### `STRING`
 
-For MOV files it can display:
+Inputs:
 
-- embedded video preview image
-- model name
-- seed
-- user prompt
-- ComfyUI workflow
-- ComfyUI execution prompt
-- reference filenames
-
-The MOV reader avoids loading the complete video payload. It scans the top-level QuickTime box structure and reads only the `moov` box required for metadata and the embedded preview image. Large ProRes `mdat` payloads therefore do not need to pass through browser memory just to inspect documentation metadata.
-
-The toolkit also provides separate folder-to-PDF modes for PNG and MOV files. Each source file produces a documentation page containing the relevant preview, metadata and references. Long prompts automatically continue onto additional pages.
-
-No ComfyUI installation or server is required to use the HTML tool.
-
----
-
-## ProRes Saver
-
-Category:
-
-```text
-KASKI/savers
-```
-
-### Save ProRes
-
-Saves a ComfyUI IMAGE batch as a QuickTime `.mov` using Apple ProRes via FFmpeg.
-
-Inputs include:
-
-- IMAGE batch interpreted as consecutive video frames
-- optional AUDIO
-- optional MASK
-- ProRes profile
-- output framerate
-- filename prefix
-- optional model name
-- optional prompt
-- integer seed
-- autogrowing reference-filename STRING inputs
-
-Available profiles:
-
-```text
-ProRes 422 Proxy
-ProRes 422 LT
-ProRes 422
-ProRes 422 HQ
-ProRes 4444
-ProRes 4444 XQ
-```
-
-The 422 profiles use a 10-bit output path. ProRes 4444 supports optional alpha and uses a 10-bit 4:4:4 path. ProRes 4444 XQ is treated as a strict 12-bit target: the saver should error instead of silently pretending a 10-bit encode is 12-bit when the installed FFmpeg backend cannot provide the required path.
-
-### Alpha
-
-The optional MASK input follows normal Comfy semantics:
-
-```text
-0.0 / black  = transparent
-1.0 / white  = visible
-```
-
-Alpha is only used by profiles that support it. If a MASK is connected while a 422 profile is selected, it is ignored with a warning. No automatic mask inversion is performed.
-
-### Audio retiming
-
-Audio is automatically conformed to the exact output video duration:
-
-```text
-video duration = frame_count / output_framerate
-```
-
-This is useful when an IMAGE sequence originated from a video at one framerate but is intentionally saved at another. The saver uses FFmpeg tempo processing to adjust audio duration while preserving pitch, then trims/pads to the exact video duration. Audio is written as uncompressed PCM in the MOV container.
-
-### Video metadata and provenance
-
-The saver stores generation information as QuickTime metadata, including:
-
-```text
-model_name
-user_prompt
-seed
-reference_files
-poster_frame_jpeg
-```
-
-`reference_files` is generated internally from the autogrowing STRING inputs and stored as a JSON array, preserving input order. This allows image, video and audio references to be documented without embedding potentially very large source media into the MOV.
+- `key`
+- multiline `value`
 
 Example:
 
-```json
-[
-  "character_father_v3.png",
-  "camera_reference.mov",
-  "voice_reference.wav"
-]
+```text
+key   = prompt
+value = A woman walking through a forest
 ```
 
-The saver also embeds a compact JPEG preview generated from video frame 0. This lets the standalone metadata toolkit display a representative video image even when the browser cannot decode ProRes itself. The preview is documentation-only and does not modify the encoded ProRes stream.
+Output:
 
-Standard ComfyUI workflow and execution-prompt metadata are retained as well unless metadata saving has been globally disabled.
+```python
+{
+    "prompt": "A woman walking through a forest"
+}
+```
+
+#### `DICT`
+
+The string field is replaced by an autogrowing list of DICT inputs.
+
+Connected DICTs are merged in input order and placed below `key`.
+
+Example:
+
+```python
+dict1 = {"character": "Anna"}
+dict2 = {"camera": "35mm"}
+dict3 = {"lighting": "soft"}
+```
+
+with:
+
+```text
+key = shot
+```
+
+produces:
+
+```python
+{
+    "shot": {
+        "character": "Anna",
+        "camera": "35mm",
+        "lighting": "soft"
+    }
+}
+```
+
+Features:
+
+- Dynamic `STRING` / `DICT` interface
+- Up to 64 nested DICT inputs
+- Automatic merging of connected DICTs
+- Later DICTs overwrite earlier values when the same key occurs
+- Empty key returns an empty DICT
+
+Use this node recursively to build larger structured dictionaries before serializing them.
+
+### Generate JSON from DICT
+
+**Problem:** Structured ComfyUI dictionaries eventually need to become valid JSON text for APIs, prompts or other string-based nodes.
+
+Serializes a DICT into a valid JSON string.
+
+Inputs:
+
+- `data` — DICT to serialize
+- `pretty` — formatted multiline JSON when enabled; compact JSON when disabled
+
+Features:
+
+- Correct JSON quoting and escaping
+- Supports nested dictionaries automatically
+- Preserves Unicode characters directly
+- Compact mode removes unnecessary whitespace
+
+Typical workflow:
+
+```text
+Generate DICT from Key-Value-Pair
+            │
+            ├── nested DICT builders
+            │
+            ▼
+Generate JSON from DICT
+            │
+            ▼
+         JSON string
+```
 
 ---
 
-## Filename-Aware Loaders
+## String Tools
 
-Category:
+Category: `KASKI/stringtools`
+
+### JSON Key-Value String — Legacy
+
+**Problem:** Older workflows may already assemble JSON manually from string fragments and need to remain loadable.
+
+Creates a JSON-style key/value string fragment and optionally wraps the value as a nested object.
+
+This node is retained for compatibility. New workflows should use `Generate DICT from Key-Value-Pair` together with `Generate JSON from DICT`, which avoids manual JSON-string assembly.
+
+### String Split at Symbol
+
+**Problem:** Production filenames and IDs often contain several fields separated by a known delimiter, but only one field is needed downstream.
+
+Splits `text` by `delimiter` and returns the element at `index`.
+
+Features:
+
+- Custom delimiter
+- Zero-based index
+- Returns an empty string when the requested index does not exist
+- Raises an error when the delimiter is empty
+
+Example:
 
 ```text
-KASKI/loaders
+text      = somat_sh012_firstFrame_v3
+delimiter = _
+index     = 1
 ```
 
-### Load Image with Filename
-
-Loads an image through ComfyUI while preserving the original source filename as a separate STRING output.
-
-Outputs:
-
-1. `IMAGE`
-2. `filename`
-3. `MASK`
-
-Image decoding and mask handling are delegated to ComfyUI's core image loader rather than reimplemented by KASKI.
-
-Typical use:
+Output:
 
 ```text
-Load Image with Filename
-    ├── IMAGE    → processing pipeline
-    ├── filename → ID extraction / save-name construction
-    └── MASK     → inpainting / mask workflow
+sh012
 ```
 
-### Load Video with Filename
+### Join Strings
 
-Loads a ComfyUI VIDEO object and returns the source filename alongside it.
+**Problem:** Building filenames, IDs, paths or prompt fragments from a variable number of strings otherwise requires chains of concatenation nodes.
 
-Outputs:
+Joins an autogrowing list of STRING inputs using one delimiter.
 
-1. `VIDEO`
-2. `filename`
+Features:
 
-The video object uses ComfyUI's current `VideoFromFile` implementation.
+- 2–50 STRING inputs
+- Inputs grow automatically as connections are added
+- Configurable delimiter
+- Preserves input order
 
-These loaders are useful whenever downstream naming, metadata, save paths or ID extraction must remain tied to the original source file.
+### Number to String
+
+**Problem:** Numeric values often need deterministic text formatting before they can be used inside filenames, IDs or prompts.
+
+Converts either an integer or float to a STRING.
+
+Features:
+
+- `INT` and `FLOAT` modes
+- Zero padding
+- Configurable decimal places for floats
+
+Example:
+
+```text
+42 + zero_padding 4
+```
+
+becomes:
+
+```text
+0042
+```
 
 ---
 
 ## ID Tools
 
-Category:
+Category: `KASKI/ID-Tools`
 
-```text
-KASKI/ID-Tools
-```
+KASKI IDs are intended for predictable production naming.
 
-The ID tools implement a small naming system for production shots and reusable reference assets.
+### Generate Reference ID
 
-### Reference IDs
+**Problem:** Reusable assets such as characters, props and locations need consistent identifiers that can safely travel through filenames and workflows.
+
+Builds a reference ID from structured fields.
 
 Format:
 
@@ -400,14 +313,12 @@ Format:
 [project_]type_name_[artist_]version
 ```
 
-Supported reference types:
+Reference types:
 
-```text
-character
-prop
-location
-material
-```
+- `character`
+- `prop`
+- `location`
+- `material`
 
 Examples:
 
@@ -415,21 +326,32 @@ Examples:
 character_father_v1
 somat_character_father_v3
 somat_character_father_KW_v3
-project_location_kitchen_AB_vN
 ```
 
-Available nodes:
+Features:
 
-| Node | Purpose |
-|---|---|
-| **Generate Reference ID** | Builds a reference ID from structured fields |
-| **Extract Reference ID** | Extracts a reference ID from a larger string or filename |
+- Optional project name
+- Optional artist code
+- Numeric version or unresolved `vN`
+- Validates components against the naming convention
+- Letters, numbers and hyphens are allowed inside components; spaces and underscores are not
 
-Project names, reference names and artist codes must not contain spaces or underscores. Hyphens are supported.
+### Extract Reference ID
 
-`vN` represents an intentionally unresolved version.
+**Problem:** A valid reference ID is often embedded inside a longer filename or path and needs to be recovered without manually parsing the string.
 
-### Shot IDs
+Searches `text` for a valid KASKI reference ID.
+
+`fail_if_not_found`:
+
+- `True` — raises an error when no ID is found
+- `False` — passes the original input string through
+
+### Generate Shot ID
+
+**Problem:** Shot files need predictable names that encode shot number, pipeline stage, artist and version consistently.
+
+Builds a shot ID.
 
 Format:
 
@@ -443,10 +365,9 @@ Examples:
 sh001_firstFrame_v1
 somat_sh012_enhanced_v4
 somat_sh012_firstFrame_KW_v5
-project_sh120_cgi_AB_vN
 ```
 
-Current pipeline-step vocabulary:
+Pipeline stages:
 
 ```text
 firstFrame
@@ -463,57 +384,102 @@ notEnhanced
 enhanced
 ```
 
-Available nodes:
+Features:
 
-| Node | Purpose |
-|---|---|
-| **Generate Shot ID** | Builds a shot ID |
-| **Modify Shot ID** | Replaces selected fields or increments an existing numeric version |
-| **Extract Shot ID** | Extracts a valid shot ID from larger text or filenames |
+- Optional project name
+- Configurable shot-number zero padding
+- Optional artist code
+- Numeric version or unresolved `vN`
 
-Shot-number zero padding is configurable. The default is three digits.
+### Modify Shot ID
 
-### Naming quick guide
+**Problem:** Existing shot IDs often need one field changed without rebuilding the entire identifier manually.
 
-The repository includes a compact naming-convention reference:
+Accepts an existing valid Shot ID and selectively modifies it.
 
-```text
-NamingConventions.pdf
-```
+Features:
 
-The production convention follows:
+- Keep or replace project name
+- Keep or replace shot number
+- Keep or replace pipeline stage
+- Keep or replace artist code
+- Keep or increment the numeric version
+- Configurable shot-number padding
+- Invalid incoming IDs pass through unchanged
 
-```text
-<project>_<type>_<name>_<artist>_<version>.<ext>
-```
+### Extract Shot ID
 
-for reusable references and:
+**Problem:** Shot IDs are commonly embedded inside filenames, paths or longer strings and need to be isolated reliably.
 
-```text
-<project>_sh###_<step>_<artist>_<version>.<ext>
-```
+Searches `text` for a valid KASKI Shot ID.
 
-for shot files.
+`fail_if_not_found`:
+
+- `True` — raises an error when no ID is found
+- `False` — passes the original string through
+
+A compact naming reference is also included in `NamingConventions.pdf`.
+
+---
+
+## Filename-Aware Loaders
+
+Category: `KASKI/loaders`
+
+### Load Image with Filename
+
+**Problem:** ComfyUI image workflows normally work with the decoded image, while the original source filename is often needed separately for naming, metadata or ID extraction.
+
+Loads an image and returns:
+
+1. `image`
+2. original `filename`
+3. `mask`
+
+Features:
+
+- Uses ComfyUI's standard image decoding
+- Preserves the basename as STRING
+- Supports normal ComfyUI image upload/selection
+- Preserves standard mask behavior
+
+### Load Video with Filename
+
+**Problem:** Video workflows frequently need the source filename alongside the VIDEO object for metadata, naming or downstream bookkeeping.
+
+Loads a video and returns:
+
+1. `video`
+2. original `filename`
+
+The VIDEO object uses ComfyUI's current file-backed video implementation.
 
 ---
 
 ## Input Conform
 
-Category:
-
-```text
-KASKI/InputConform
-```
+Category: `KASKI/InputConform`
 
 ### Min/Max Size
 
-Calculates an output canvas size from minimum and maximum width/height constraints without modifying the input image.
+**Problem:** An image often needs a target canvas that respects minimum and maximum resolution limits without manually calculating aspect-ratio-safe dimensions.
 
-The node attempts to preserve the original aspect ratio through proportional scaling.
+Calculates recommended output width and height from the input image dimensions and four optional constraints.
 
-If the active minimum and maximum constraints cannot all be satisfied through scaling alone, the result describes a canvas that expects the remaining space to be created through downstream padding.
+Inputs:
 
-A constraint value of `0` disables that constraint.
+- `min_width`
+- `min_height`
+- `max_width`
+- `max_height`
+
+Set any constraint to `0` to disable it.
+
+Features:
+
+- Preserves source aspect ratio whenever the constraints allow it
+- Does not resize the image itself
+- When minimum and maximum limits cannot all be satisfied through scaling, the result assumes remaining minimum size will be created through downstream padding
 
 Outputs:
 
@@ -522,7 +488,9 @@ Outputs:
 
 ### Align Frames to Seconds
 
-Calculates the smallest whole-second duration that can contain a frame sequence at the selected FPS, then returns the required frame count.
+**Problem:** Some video pipelines require clips whose duration lands on whole seconds, while a source frame count may not.
+
+Calculates the smallest whole-second duration that contains the source sequence at the selected FPS.
 
 Outputs:
 
@@ -530,11 +498,30 @@ Outputs:
 - `length_in_seconds`
 - `fps`
 
-Useful for preparing clips for pipelines that expect whole-second durations.
+Example at 24 fps:
+
+```text
+24 frames → 24 frames / 1 second
+25 frames → 48 frames / 2 seconds
+```
 
 ### WAN Video Optimals
 
-Calculates preferred WAN/VACE target parameters from an IMAGE sequence.
+**Problem:** WAN/VACE workflows require suitable resolution buckets and temporal lengths following the `4n + 1` frame rule.
+
+Inspects an IMAGE sequence and calculates recommended WAN/VACE parameters without modifying the sequence.
+
+Resolution buckets:
+
+```text
+480 × 832
+832 × 480
+512 × 512
+768 × 768
+1024 × 1024
+1280 × 720
+720 × 1280
+```
 
 Outputs:
 
@@ -542,273 +529,205 @@ Outputs:
 - `optimal_height`
 - `optimal_n_frames`
 
-The node selects from predefined WAN/VACE resolution buckets and expands the temporal length to the next valid:
-
-```text
-4n + 1
-```
-
-frame count.
+The resolution selection considers aspect ratio, dimension difference and scaling cost. Frame count is expanded to the nearest valid `4n + 1` value at or above the source length.
 
 ---
 
 ## Video Tools
 
-Category:
+Category: `KASKI/videoTools`
 
-```text
-KASKI/videoTools
-```
-
-IMAGE batches are interpreted as temporal image sequences.
+IMAGE batches are interpreted as ordered video frames.
 
 ### Extend Video
 
-Extends a sequence until it contains at least the requested number of frames.
+**Problem:** A generated or processed sequence may contain fewer frames than a downstream video model or conform step requires.
+
+Extends the sequence until it contains at least `n_frames`.
 
 Methods:
 
-- `ping_pong`
-- `repeat_last_frame`
-- `repeat_from_start`
+- `ping_pong` — continues by reversing and replaying the sequence
+- `repeat_last_frame` — holds the final frame
+- `repeat_from_start` — loops frames from the beginning
 
-Sequences that are already long enough pass through unchanged.
+Sequences already long enough pass through unchanged.
 
 ### Shorten Video
 
-Reduces a sequence to at most the requested number of frames.
+**Problem:** A sequence may contain more frames than a downstream model, duration or delivery format allows.
+
+Reduces the sequence to at most `n_frames`.
 
 Methods:
 
-- `cut_end`
-- `cut_beginning`
-- `resample`
+- `cut_end` — keeps the first frames
+- `cut_beginning` — keeps the last frames
+- `resample` — distributes retained frames across the complete temporal span
 
-`resample` distributes the selected frames across the complete temporal span rather than simply trimming the sequence.
+Sequences already short enough pass through unchanged.
 
 ### Temporal Smoother
 
-Analyzes local frame-to-frame motion and can rebuild the temporal sampling density around detected motion irregularities.
+**Problem:** AI-generated video can contain irregular apparent motion where individual frame transitions move much more or less than their local temporal neighborhood.
 
-The current implementation uses RIFE optical flow for motion analysis.
+Analyzes frame-to-frame motion with RIFE optical flow and can rebuild the temporal sampling density around motion irregularities.
 
-Resampling methods:
+Inputs:
 
-- `rife`
-- `blend`
+- `images`
+- `resample`
+- `resample_method`
+  - `rife`
+  - `blend`
+- `sensitivity`
 
-The node produces:
+Sensitivity:
 
-1. resampled IMAGE sequence
-2. human-readable motion table
+- `0` effectively disables correction strength
+- `1` follows the measured motion ratio directly
+- values above `1` increase correction strength
 
-The motion table exposes per-transition information including:
+Outputs:
 
-- measured motion
-- local baseline
-- motion ratio
-- sensitivity-adjusted ratio
-- target temporal intervals
-- selected action
+1. processed IMAGE sequence
+2. `motion_table`
 
-This node is experimental production tooling rather than a general-purpose frame-interpolation replacement.
+The motion table reports frame-level analysis including measured motion, local baseline, motion ratio, sensitivity-adjusted ratio, target temporal intervals and the selected action (`COLLAPSE`, `KEEP` or `INSERT`).
+
+Disable `resample` to run analysis without modifying the sequence.
+
+This is specialized temporal repair tooling, not a general frame-interpolation replacement.
 
 ---
 
-## String Tools
+## Savers
 
-Category:
+Category: `KASKI/savers`
+
+### Save PNG with metadata
+
+**Problem:** Production images need predictable high-bit-depth output while preserving enough generation metadata to reconstruct or document how they were created.
+
+Saves IMAGE tensors directly as PNG.
+
+Features:
+
+- 8-bit or 16-bit PNG
+- Batch saving
+- No additional gamma or color-space transform
+- Standard ComfyUI workflow metadata
+- Standard ComfyUI execution-prompt metadata
+- Optional `model_name`
+- Optional `user_prompt`
+- Optional `seed`
+- Optional reference IMAGE batch
+- Each reference frame is embedded into the PNG as its own 8-bit PNG payload
+- Standard ComfyUI filename-prefix formatting tokens
+- Returns the input IMAGE batch for downstream use
+
+The node assumes input pixel values already represent the desired display-ready image.
+
+### Save ProRes
+
+**Problem:** IMAGE sequences need a production-friendly MOV export with controlled ProRes profile, correct timing, optional alpha/audio and retained generation provenance.
+
+Encodes an IMAGE batch as Apple ProRes through FFmpeg.
+
+Profiles:
 
 ```text
-KASKI/stringtools
+ProRes 422 Proxy
+ProRes 422 LT
+ProRes 422
+ProRes 422 HQ
+ProRes 4444
+ProRes 4444 XQ
 ```
 
-### JSON Key-Value String
+Features:
 
-Builds a JSON-style key/value fragment for assembling structured strings inside a workflow.
+- Configurable output framerate
+- Optional AUDIO
+- Optional MASK as alpha
+- Autogrowing reference-filename inputs
+- Optional model, prompt and seed metadata
+- Standard ComfyUI workflow/execution metadata
+- Embedded JPEG poster frame for documentation tools
+- Returns both the IMAGE sequence and saved filepath
 
-Supports optional nested wrapping.
+Alpha:
 
-### String Split at Symbol
+```text
+black / 0.0 = transparent
+white / 1.0 = visible
+```
 
-Splits a string using a custom delimiter and returns the selected element by index.
+Alpha is only used by profiles that support it. A mask connected to a 422 profile is ignored with a warning.
 
-### Join Strings
+Audio is automatically retimed to:
 
-Joins multiple STRING inputs using a configurable delimiter.
+```text
+duration = frame_count / framerate
+```
 
-The input list uses ComfyUI V3 autogrowing inputs and can expand dynamically.
+Pitch is preserved, then the result is trimmed or padded to the exact video duration. Audio is stored as uncompressed PCM.
 
-### Number to String
-
-Formats either an integer or float as a STRING.
-
-Supports:
-
-- integer / float mode
-- zero padding
-- configurable decimal places
+The 422 profiles use a 10-bit path. ProRes 4444 supports alpha. ProRes 4444 XQ is treated as a strict 12-bit target and errors when the installed FFmpeg path cannot provide the required encode instead of silently falling back.
 
 ---
 
 ## Async Utilities
 
-Category:
-
-```text
-KASKI/async
-```
+Category: `KASKI/async`
 
 ### Async Delay
 
-Passes an IMAGE through unchanged after a configurable asynchronous delay in milliseconds.
+**Problem:** Some workflows need a simple non-blocking timing offset between branches or operations.
 
-Useful for:
+Passes an IMAGE through unchanged after `delay` milliseconds.
 
-- staggering operations
-- testing asynchronous workflows
-- simple timing offsets
+Features:
 
-The delay uses `asyncio.sleep()` and does not intentionally block the entire event loop.
-
----
-
-# Suggested Workflow Patterns
-
-## Generation → Metadata → Save
-
-```text
-KASKI Image API Settings
-          │
-          ▼
-KASKI Image API Generator
-    ├── image ─────────────────────────────┐
-    ├── prompt ───────────────┐            │
-    ├── modelName ────────┐   │            │
-    └── seed ──────────┐  │   │            │
-                      ▼  ▼   ▼            ▼
-                 Save PNG with metadata
-```
-
-Optional reference IMAGE batches can be connected to the saver so the exact visual references are carried inside the resulting PNG.
-
-For video workflows, the same provenance idea is intentionally lighter-weight: the ProRes saver stores reference filenames as a JSON array instead of embedding potentially huge image/video/audio sources.
-
-## Filename-Driven Shot Processing
-
-```text
-Load Image with Filename
-    ├── IMAGE → processing pipeline
-    └── filename
-            ↓
-      Extract Shot ID
-            ↓
-       Modify Shot ID
-            ↓
-     save-name construction
-```
-
-## Centralized API Configuration
-
-```text
-KASKI Image API Settings
-    ├── KASKI Image API Generator
-    ├── KASKI Image API Generator
-    └── KASKI Image API Generator
-```
-
-One settings object can coordinate multiple generation branches.
-
-## Production Reference Naming
-
-```text
-Generate Reference ID
-        ↓
-somat_character_father_KW_v3
-        ↓
-metadata / save path / review export
-```
+- Configurable delay
+- Uses `asyncio.sleep()`
+- Does not intentionally block the complete event loop
+- IMAGE data itself is unchanged
 
 ---
 
-# Architecture
+# Metadata Toolkit
 
-KASKI Nodes uses ComfyUI's V3 extension interface.
-
-Each module exports a list of node classes, and the package-level extension collects them through a single `comfy_entrypoint()`.
-
-Conceptually:
+The repository includes:
 
 ```text
-__init__.py
-    │
-    ├── ASYNC tools
-    ├── ID tools
-    ├── image saver
-    ├── ProRes saver
-    ├── input conform
-    ├── loaders
-    ├── string tools
-    ├── unified image API
-    └── video tools
+KASKI_PNG_MOV_Metadata_Toolkit.html
 ```
 
-The package intentionally avoids legacy `NODE_CLASS_MAPPINGS` registration.
+**Problem:** Generation metadata embedded in production outputs is useful only if it can be inspected and documented without reopening ComfyUI.
 
----
+The standalone HTML tool runs locally in a browser and supports PNG and MOV files.
 
-# Repository Structure
+For PNG it can inspect:
 
-```text
-KASKI-Nodes/
-├── __init__.py
-├── async_tools.py
-├── id_tools.py
-├── image_saver.py
-├── prores_saver.py
-├── input_conform.py
-├── loaders.py
-├── string_tools.py
-├── unified_image_api.py
-├── video_tools.py
-│
-├── external_libraries/
-│   └── RIFE/
-│
-├── KASKI_PNG_Metadata_Toolkit.html
-├── NamingConventions.pdf
-├── README.md
-└── .gitignore
-```
+- output image
+- model
+- seed
+- user prompt
+- ComfyUI workflow
+- ComfyUI execution prompt
+- embedded reference images
 
----
+For MOV it can inspect:
 
-# Design Philosophy
+- embedded poster frame
+- model
+- seed
+- user prompt
+- ComfyUI workflow
+- ComfyUI execution prompt
+- reference filenames
 
-The package follows a few simple principles:
+It can also generate documentation PDFs from folders of PNG or MOV outputs.
 
-**Own workflow behavior, not upstream infrastructure.**  
-Where ComfyUI already provides decoding, authentication, provider execution or transport logic, KASKI tries to reuse it instead of maintaining a parallel implementation.
-
-**Keep production identity explicit.**  
-Shot IDs, asset IDs, filenames and generation provenance should survive the workflow rather than becoming implicit knowledge. PNG outputs can carry their visual references directly; video outputs carry reference filenames and a compact preview image so documentation remains useful without turning master files into media archives.
-
-**Small nodes should compose.**  
-A filename loader, an ID parser, a string formatter and a metadata saver are individually simple. Their value comes from making larger workflows predictable.
-
-**Prefer boring reliability over clever abstraction.**  
-Most nodes exist because a production workflow needed a repeatable answer to a mundane problem.
-
----
-
-# Development Status
-
-KASKI Nodes is built around active production needs and recent ComfyUI APIs.
-
-The unified API adapter deliberately reuses provider interfaces from `comfy_api_nodes`, including some upstream helper functions. These interfaces can change as ComfyUI evolves.
-
-When updating ComfyUI, verify the API-adaption nodes before relying on them in unattended or production-critical workflows.
-
-The local utility nodes are substantially less dependent on provider-specific upstream behavior.
-
-Issues and focused pull requests are welcome.
+No ComfyUI server is required to use the metadata toolkit.

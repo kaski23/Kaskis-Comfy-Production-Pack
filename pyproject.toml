@@ -1,0 +1,16 @@
+[project]
+name = "kaskis-comfy-production-pack"
+version = "1.0.0"
+description = "Production-focused ComfyUI nodes, API adaptions, runtime patches and workflow utilities."
+requires-python = ">=3.13"
+dependencies = [
+    "imageio-ffmpeg>=0.6.0",
+]
+
+[project.urls]
+Repository = "https://github.com/kaski23/Kaskis-Comfy-Production-Pack"
+
+[tool.comfy]
+PublisherId = "kaski"
+DisplayName = "Kaski's Comfy Production Pack"
+Icon = ""

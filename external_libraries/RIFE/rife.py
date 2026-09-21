@@ -23,6 +23,8 @@ Expected weight files:
 
 from __future__ import annotations
 
+import math
+
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -389,7 +391,13 @@ class _IFNet(nn.Module):
         image_1: torch.Tensor,
         timestep: float = 0.5,
         return_flow: bool = False,
+        scale: float = 1.0,
     ) -> torch.Tensor:
+
+        if not math.isfinite(scale) or scale <= 0.0:
+            raise ValueError(
+                f"RIFE scale must be a positive finite number, got {scale}"
+            )
 
         image_0 = image_0.clamp(0.0, 1.0)
         image_1 = image_1.clamp(0.0, 1.0)
@@ -426,6 +434,8 @@ class _IFNet(nn.Module):
 
         for index, block in enumerate(blocks):
 
+            block_scale = self.scale_list[index] / scale
+
             if flow is None:
 
                 block_input = torch.cat(
@@ -442,7 +452,7 @@ class _IFNet(nn.Module):
                 flow, mask, recurrent_features = block(
                     block_input,
                     flow=None,
-                    scale=self.scale_list[index],
+                    scale=block_scale,
                 )
 
             else:
@@ -473,7 +483,7 @@ class _IFNet(nn.Module):
                 delta_flow, mask, recurrent_features = block(
                     block_input,
                     flow=flow,
-                    scale=self.scale_list[index],
+                    scale=block_scale,
                 )
 
                 flow = flow + delta_flow
@@ -632,7 +642,7 @@ def _select_inference_dtype(
 ) -> torch.dtype:
 
     if device.type == "cuda":
-        return torch.float16
+        return torch.float32
 
     return torch.float32
 
@@ -921,6 +931,7 @@ def calculate_optical_flow(
     image_1: torch.Tensor,
     image_2: torch.Tensor,
     model: str = "4.25",
+    scale: float = 1.0,
 ) -> Tuple[
     torch.Tensor,
     torch.Tensor,
@@ -938,18 +949,16 @@ def calculate_optical_flow(
         model:
             "4.25" or "4.25.lite".
 
+        scale:
+            Internal RIFE processing scale. Values below 1.0 increase
+            internal downscaling and are often better for UHD material.
+
     Returns:
         flow_image_1:
             [H,W,2]
 
         flow_image_2:
             [H,W,2]
-
-    The two flow fields are the final midpoint-directed flow fields
-    RIFE uses internally to warp image_1 and image_2.
-
-    Outputs are returned on the same device and in the same dtype
-    as image_1.
     """
 
     (
@@ -973,6 +982,7 @@ def calculate_optical_flow(
             rgb_2,
             timestep=0.5,
             return_flow=True,
+            scale=scale,
         )
 
         flow = flow[
@@ -1011,12 +1021,12 @@ def calculate_optical_flow(
 # =============================================================================
 # Public API: Frame interpolation
 # =============================================================================
-
 def interpolate_between_two_frames(
     image_1: torch.Tensor,
     image_2: torch.Tensor,
     timestep: float = 0.5,
     model: str = "4.25",
+    scale: float = 1.0,
 ) -> torch.Tensor:
     """
     Interpolate an arbitrary temporal position between two HWC image tensors.
@@ -1058,6 +1068,7 @@ def interpolate_between_two_frames(
             rgb_2,
             timestep=timestep,
             return_flow=False,
+            scale=scale,
         )
 
         interpolated_rgb = interpolated_rgb[

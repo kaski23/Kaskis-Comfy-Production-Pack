@@ -22,6 +22,9 @@ class ExtendVideo(IO.ComfyNode):
 
     If the input already contains at least n_frames, it is returned
     unchanged.
+
+    The "interpolated" method temporally stretches the complete input
+    sequence to exactly n_frames using RIFE interpolation.
     """
 
     @classmethod
@@ -51,11 +54,27 @@ class ExtendVideo(IO.ComfyNode):
                         "ping_pong",
                         "repeat_last_frame",
                         "repeat_from_start",
+                        "interpolated",
                     ],
                     default="ping_pong",
                     tooltip=(
                         "How additional frames are generated: reverse the sequence, "
-                        "hold the last frame, or loop from the beginning."
+                        "hold the last frame, loop from the beginning, or temporally "
+                        "stretch the sequence using RIFE interpolation."
+                    ),
+                ),
+                # UI-Logik:
+                # nur anzeigen, wenn method == "interpolated"
+                IO.Float.Input(
+                    "scale",
+                    default=1.0,
+                    min=0.05,
+                    max=4.0,
+                    step=0.05,
+                    tooltip=(
+                        "RIFE internal scale used by the interpolated method. "
+                        "Lower values increase internal downscaling and often work "
+                        "better for UHD footage."
                     ),
                 ),
             ],
@@ -73,10 +92,13 @@ class ExtendVideo(IO.ComfyNode):
         video: torch.Tensor,
         n_frames: int,
         method: str,
+        scale: float,
     ) -> IO.NodeOutput:
+
         if video.ndim != 4:
             raise ValueError(
-                f"Expected IMAGE tensor with shape (B,H,W,C), got {tuple(video.shape)}"
+                f"Expected IMAGE tensor with shape (B,H,W,C), "
+                f"got {tuple(video.shape)}"
             )
 
         current_frames = video.shape[0]
@@ -86,6 +108,17 @@ class ExtendVideo(IO.ComfyNode):
 
         if current_frames >= n_frames:
             return IO.NodeOutput(video)
+
+        if method == "interpolated":
+            output = cls._extend_interpolated(
+                video,
+                n_frames,
+                scale,
+            )
+
+            return IO.NodeOutput(
+                output.contiguous()
+            )
 
         missing_frames = n_frames - current_frames
 
@@ -182,6 +215,101 @@ class ExtendVideo(IO.ComfyNode):
             1,
             1,
         )[:count]
+
+    @staticmethod
+    def _extend_interpolated(
+        video: torch.Tensor,
+        target_frames: int,
+        scale: float,
+    ) -> torch.Tensor:
+        source_frames = video.shape[0]
+
+        if source_frames == 1:
+            return video.repeat(
+                target_frames,
+                1,
+                1,
+                1,
+            )
+
+        positions = torch.linspace(
+            0.0,
+            source_frames - 1,
+            steps=target_frames,
+            device=video.device,
+        )
+
+        output_frames = []
+
+        generated_frames = 0
+
+        for position in positions:
+            source_position = float(position.item())
+
+            lower_index = math.floor(source_position)
+            upper_index = min(
+                lower_index + 1,
+                source_frames - 1,
+            )
+
+            timestep = (
+                source_position
+                - lower_index
+            )
+
+            if (
+                lower_index != upper_index
+                and timestep > 1e-8
+                and timestep < 1.0 - 1e-8
+            ):
+                generated_frames += 1
+
+        progress_bar = ProgressBar(
+            generated_frames
+        )
+
+        for position in positions:
+            source_position = float(position.item())
+
+            lower_index = math.floor(source_position)
+            upper_index = min(
+                lower_index + 1,
+                source_frames - 1,
+            )
+
+            timestep = (
+                source_position
+                - lower_index
+            )
+
+            if (
+                lower_index == upper_index
+                or timestep <= 1e-8
+            ):
+                frame = video[lower_index]
+
+            elif timestep >= 1.0 - 1e-8:
+                frame = video[upper_index]
+
+            else:
+                frame = interpolate_between_two_frames(
+                    video[lower_index],
+                    video[upper_index],
+                    timestep=timestep,
+                    model="4.25",
+                    scale=scale,
+                )
+
+                progress_bar.update(1)
+
+            output_frames.append(
+                frame
+            )
+
+        return torch.stack(
+            output_frames,
+            dim=0,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +478,32 @@ class TemporalSmoother(IO.ComfyNode):
                         "directly, values above 1 increase correction strength."
                     ),
                 ),
+                # UI-Logik:
+                # würde ich immer sichtbar lassen, weil Analyse immer läuft
+                IO.Float.Input(
+                    "scale_analysis",
+                    default=1.0,
+                    min=0.05,
+                    max=4.0,
+                    step=0.05,
+                    tooltip=(
+                        "RIFE internal scale used for motion analysis optical flow. "
+                        "Separate from the fixed image downscale used before analysis."
+                    ),
+                ),
+                # UI-Logik:
+                # nur anzeigen, wenn resample == True and resample_method == "rife"
+                IO.Float.Input(
+                    "scale_fill",
+                    default=1.0,
+                    min=0.05,
+                    max=4.0,
+                    step=0.05,
+                    tooltip=(
+                        "RIFE internal scale used when filling inserted frames. "
+                        "Only relevant when resample is enabled and resample_method is rife."
+                    ),
+                ),
             ],
             outputs=[
                 IO.Image.Output(
@@ -393,6 +547,7 @@ class TemporalSmoother(IO.ComfyNode):
     @staticmethod
     def _calculate_frame_motion(
         images: torch.Tensor,
+        scale_analysis: float,
     ) -> torch.Tensor:
         motion_scores = []
 
@@ -401,6 +556,7 @@ class TemporalSmoother(IO.ComfyNode):
                 images[i],
                 images[i + 1],
                 model="4.25",
+                scale=scale_analysis,
             )
 
             magnitude_1 = torch.linalg.vector_norm(
@@ -516,13 +672,15 @@ class TemporalSmoother(IO.ComfyNode):
         cls,
         images: torch.Tensor,
         sensitivity: float,
+        scale_analysis: float,
     ):
         analysis_images = cls._downscale_for_analysis(
             images
         )
 
         motion = cls._calculate_frame_motion(
-            analysis_images
+            analysis_images,
+            scale_analysis,
         )
 
         baseline = cls._calculate_motion_baseline(
@@ -706,12 +864,14 @@ class TemporalSmoother(IO.ComfyNode):
         image_1: torch.Tensor,
         image_2: torch.Tensor,
         timestep: float,
+        scale_fill: float,
     ) -> torch.Tensor:
         return interpolate_between_two_frames(
             image_1,
             image_2,
             timestep=timestep,
             model="4.25",
+            scale=scale_fill,
         )
 
     @staticmethod
@@ -733,12 +893,14 @@ class TemporalSmoother(IO.ComfyNode):
         image_1: torch.Tensor,
         image_2: torch.Tensor,
         timestep: float,
+        scale_fill: float,
     ) -> torch.Tensor:
         if resample_method == "rife":
             return cls._resample_rife(
                 image_1,
                 image_2,
                 timestep,
+                scale_fill,
             )
 
         if resample_method == "blend":
@@ -758,6 +920,7 @@ class TemporalSmoother(IO.ComfyNode):
         images: torch.Tensor,
         table: list,
         resample_method: str,
+        scale_fill: float,
     ) -> torch.Tensor:
         output_frames = [
             images[0]
@@ -809,6 +972,7 @@ class TemporalSmoother(IO.ComfyNode):
                         image_1,
                         image_2,
                         timestep,
+                        scale_fill,
                     )
                 )
 
@@ -830,6 +994,8 @@ class TemporalSmoother(IO.ComfyNode):
         resample: bool,
         resample_method: str,
         sensitivity: float,
+        scale_analysis: float,
+        scale_fill: float,
     ) -> IO.NodeOutput:
         if images.ndim != 4:
             raise ValueError(
@@ -875,6 +1041,7 @@ class TemporalSmoother(IO.ComfyNode):
         ) = cls._analyze_images(
             images,
             sensitivity,
+            scale_analysis,
         )
 
         table = cls._generate_table(
@@ -894,6 +1061,7 @@ class TemporalSmoother(IO.ComfyNode):
                 images,
                 table,
                 resample_method,
+                scale_fill,
             )
         else:
             output_images = images

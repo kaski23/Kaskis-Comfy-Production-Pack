@@ -421,6 +421,13 @@ class AlignFramesToSeconds(IO.ComfyNode):
                     max=240.0,
                     tooltip="Frame rate used to align the sequence length to a whole number of seconds.",
                 ),
+                IO.Int.Input(
+                    "minimum_length_frames",
+                    default=72,
+                    min=1,
+                    max=999999999,
+                    tooltip="The minimum number of frames a video needs",
+                ),
             ],
             outputs=[
                 IO.Int.Output(
@@ -443,13 +450,14 @@ class AlignFramesToSeconds(IO.ComfyNode):
         cls,
         n_frames: int,
         fps: float,
+        minimum_length_frames: int
     ) -> IO.NodeOutput:
         """
         Calculates the smallest whole-second duration that can contain
         the given number of frames, then calculates the minimum number
         of frames required to cover that duration.
         """
-
+        n_frames = max(n_frames, minimum_length_frames)
         length_in_seconds = math.ceil(
             n_frames / fps
         )

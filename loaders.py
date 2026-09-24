@@ -8,7 +8,7 @@ from comfy_api.latest import IO, InputImpl
 
 
 # ---------------------------------------------------------------------------
-# Load Video with Filename
+# Load Video + Image Sequence + Alpha
 # ---------------------------------------------------------------------------
 
 class LoadVideoWithFilename(IO.ComfyNode):
@@ -29,7 +29,7 @@ class LoadVideoWithFilename(IO.ComfyNode):
         )
 
         return IO.Schema(
-            node_id="LoadVideoWithFilename_KASKI",
+            node_id="LoadVideoWithFilename_KASKI",  # DO NOT CHANGE
             display_name="Load Video with Filename",
             category="KASKI/loaders",
             inputs=[
@@ -40,11 +40,20 @@ class LoadVideoWithFilename(IO.ComfyNode):
                 ),
             ],
             outputs=[
+                # Existing outputs — positions MUST stay unchanged
                 IO.Video.Output(
                     display_name="video",
                 ),
                 IO.String.Output(
                     display_name="filename",
+                ),
+
+                # New outputs — append only
+                IO.Image.Output(
+                    display_name="images",
+                ),
+                IO.Mask.Output(
+                    display_name="alpha",
                 ),
             ],
         )
@@ -56,9 +65,22 @@ class LoadVideoWithFilename(IO.ComfyNode):
     ) -> IO.NodeOutput:
         video_path = folder_paths.get_annotated_filepath(file)
 
+        video = InputImpl.VideoFromFile(video_path)
+        components = video.get_components()
+
+        images = components.images
+        alpha = components.alpha
+
+        if alpha is not None:
+            alpha = alpha[..., 0]
+        else:
+            alpha = images.new_ones(images.shape[:3])
+
         return IO.NodeOutput(
-            InputImpl.VideoFromFile(video_path),
-            os.path.basename(video_path),
+            video,                       # output 0 — unchanged
+            os.path.basename(video_path),# output 1 — unchanged
+            images,                      # output 2 — new
+            alpha,                       # output 3 — new
         )
 
     @classmethod

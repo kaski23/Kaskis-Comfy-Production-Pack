@@ -10,6 +10,7 @@ from .string_tools import STRING_TOOLS_NODES_LIST
 from .api_adaptions import API_ADAPTIONS_NODES_LIST
 from .video_saver import PRORES_SAVER_NODE_LIST
 from .video_tools import VIDEO_TOOLS_NODES_LIST
+from .flow_control import FLOW_CONTROL_NODES_LIST
 
 #apply patches
 apply_comfy_patches()
@@ -26,7 +27,8 @@ class KaskisComfyNodes(ComfyExtension):
             *STRING_TOOLS_NODES_LIST,
             *API_ADAPTIONS_NODES_LIST,
             *PRORES_SAVER_NODE_LIST,
-            *VIDEO_TOOLS_NODES_LIST
+            *VIDEO_TOOLS_NODES_LIST,
+            *FLOW_CONTROL_NODES_LIST,
         ]
 
 async def comfy_entrypoint():

@@ -14,6 +14,7 @@ class AsyncDelay(IO.ComfyNode):
                 IO.Image.Input(
                     "image",
                     tooltip="The images to delay.",
+                    optional=True,
                 ),
                 IO.Int.Input(
                     "delay",

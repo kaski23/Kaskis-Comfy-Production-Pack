@@ -4,6 +4,7 @@ from .comfy_patches import apply_comfy_patches
 from .async_tools import ASYNC_TOOLS_NODES_LIST
 from .id_tools import ID_TOOLS_NODES_LIST
 from .image_saver import IMAGE_SAVER_NODES_LIST
+from .image_tools import IMAGE_TOOLS_NODES_LIST
 from .input_conform import INPUT_CONFORM_NODES_LIST
 from .loaders import LOADERS_NODES_LIST
 from .string_tools import STRING_TOOLS_NODES_LIST
@@ -22,6 +23,7 @@ class KaskisComfyNodes(ComfyExtension):
             *ASYNC_TOOLS_NODES_LIST,
             *ID_TOOLS_NODES_LIST,
             *IMAGE_SAVER_NODES_LIST,
+            *IMAGE_TOOLS_NODES_LIST,
             *INPUT_CONFORM_NODES_LIST,
             *LOADERS_NODES_LIST,
             *STRING_TOOLS_NODES_LIST,

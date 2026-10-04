@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from comfy_api.latest import IO
@@ -12,6 +13,8 @@ from comfy_api_nodes.nodes_kling import OmniProFirstLastFrameNode
 
 from .videoapi_common import (
     CATEGORY,
+    _autogrow_image_list_input,
+    _autogrow_images_to_list,
     Variant,
     _black_video,
     _build_core_params,
@@ -54,7 +57,6 @@ def _kling_label(model_name: str) -> str:
     """Convert Kling API model IDs into readable UI labels."""
     return {
         "kling-v3-omni": "Kling 3.0 Omni",
-        "kling-video-o1": "Kling Video O1",
     }.get(model_name, model_name)
 
 
@@ -69,11 +71,27 @@ FIRST_LAST_VARIANTS = tuple([
     *_combo_variants(
         OmniProFirstLastFrameNode,
         selector_id="model_name",
+        allowed_models=frozenset({"kling-v3-omni"}),
         exclude=COMMON_EXCLUDE | {"first_frame", "end_frame"},
         route="kling_first_last",
         label=_kling_label,
     ),
 ])
+
+# Dedicated first/end frame sockets remain; additional Kling references use Autogrow.
+FIRST_LAST_VARIANTS = tuple(
+    replace(
+        variant,
+        inputs=tuple(
+            _autogrow_image_list_input(
+                "reference_images", 6,
+                "Up to 6 additional images, one per socket. Cannot be combined with last_frame.",
+            ) if item.id == "reference_images" else item
+            for item in variant.inputs
+        ),
+    ) if variant.route == "kling_first_last" else variant
+    for variant in FIRST_LAST_VARIANTS
+)
 
 FIRST_LAST_LOOKUP = {
     variant.label: variant
@@ -105,6 +123,7 @@ def _inject_inputs(
     elif variant.route == "kling_first_last":
         params["first_frame"] = first_frame
         params["end_frame"] = last_frame
+        params["reference_images"] = _autogrow_images_to_list(params.get("reference_images"))
 
 
 class KASKIFirstLastFrameToVideoAPI(IO.ComfyNode):

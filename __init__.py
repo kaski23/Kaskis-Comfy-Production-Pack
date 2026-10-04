@@ -1,5 +1,8 @@
 from comfy_api.latest import ComfyExtension
+
 from .comfy_patches import apply_comfy_patches
+import comfy_api_nodes.nodes_bytedance as bd
+from comfy_api_nodes.util import client
 
 from .async_tools import ASYNC_TOOLS_NODES_LIST
 from .id_tools import ID_TOOLS_NODES_LIST
@@ -15,6 +18,13 @@ from .flow_control import FLOW_CONTROL_NODES_LIST
 
 #apply patches
 apply_comfy_patches()
+
+print("KASKI patched retry 402 into RETRY:", client._RETRY_STATUS)
+fmt = next(
+    x for x in bd._seedance25_text_inputs()
+    if x.id == "output_format"
+)
+print("KASKI added mov to seedance 2.5 nodes:", vars(fmt))
 
 # V3-Inits
 class KaskisComfyNodes(ComfyExtension):

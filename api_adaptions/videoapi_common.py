@@ -133,6 +133,7 @@ def _combo_variants(
     exclude: set[str],
     route: str,
     label: Callable[[str], str],
+    allowed_models: frozenset[str] | None = None,
 ) -> list[Variant]:
     """Expand a normal Comfy Combo selector into KASKI model variants."""
     schema = node_cls.define_schema()
@@ -163,6 +164,7 @@ def _combo_variants(
             route=route,
         )
         for model_name in selector.options
+        if allowed_models is None or str(model_name) in allowed_models
     ]
 
 
@@ -287,3 +289,33 @@ def _hidden_inputs():
         IO.Hidden.api_key_comfy_org,
         IO.Hidden.unique_id,
     ]
+
+
+def _autogrow_image_list_input(input_id: str, maximum: int, tooltip: str) -> Input:
+    """Separate image sockets, including for optional Kling frame references."""
+    return IO.Autogrow.Input(
+        input_id,
+        template=IO.Autogrow.TemplateNames(
+            IO.Image.Input("reference_image"),
+            names=[f"image_{index}" for index in range(1, maximum + 1)],
+            min=0,
+        ),
+        tooltip=tooltip,
+    )
+
+
+def _autogrow_images_to_list(group: IO.Autogrow.Type | None) -> list[torch.Tensor] | None:
+    """Keep image dimensions intact and reject batches within a socket."""
+    images = []
+    for name, image in (group or {}).items():
+        if image is None:
+            continue
+        if not isinstance(image, torch.Tensor):
+            raise TypeError(f"{name}: expected a Comfy IMAGE tensor.")
+        if image.ndim != 4 or image.shape[0] != 1:
+            raise ValueError(
+                f"{name}: expected one BHWC image per socket, got {tuple(image.shape)}. "
+                "Connect each image to its own reference socket."
+            )
+        images.append(image)
+    return images or None

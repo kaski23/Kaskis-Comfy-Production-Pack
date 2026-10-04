@@ -11,6 +11,7 @@ from comfy_api.latest import IO
 
 from comfy_api_nodes.nodes_bytedance import ByteDance2ReferenceNodeV2
 from comfy_api_nodes.nodes_kling import (
+    OmniProEditVideoNode,
     OmniProImageToVideoNode,
     OmniProVideoToVideoNode,
 )
@@ -32,6 +33,11 @@ from .videoapi_common import (
 
 log = logging.getLogger(__name__)
 
+
+class KlingReferenceInputError(ValueError):
+    """Invalid Omni reference wiring; abort instead of producing fallback video."""
+
+
 COMMON_EXCLUDE = {"prompt", "seed"}
 
 PROMPT_TOOLTIP = (
@@ -46,7 +52,7 @@ SEED_TOOLTIP = (
 MODEL_TOOLTIP = (
     "Seedance supports image/video/audio references. Gemini supports "
     "image/video references. Kling supports image-reference or "
-    "video-reference routes, but no audio references."
+    "video-reference and edit routes, but no audio references."
 )
 
 REFERENCE_IMAGES_TOOLTIP = (
@@ -57,7 +63,8 @@ REFERENCE_IMAGES_TOOLTIP = (
 
 REFERENCE_VIDEOS_TOOLTIP = (
     "Video references. Seedance 2.5: up to 10; Seedance 2.0: 3; "
-    "Gemini Omni: 3; Kling video-reference mode: exactly 1."
+    "Gemini Omni: 3; Kling Image References: 0; "
+    "Kling Video Reference / Edit Video: exactly 1."
 )
 
 REFERENCE_AUDIOS_TOOLTIP = (
@@ -70,7 +77,6 @@ def _kling_label(model_name: str) -> str:
     """Convert Kling API model IDs into readable UI labels."""
     return {
         "kling-v3-omni": "Kling 3.0 Omni",
-        "kling-video-o1": "Kling Video O1",
     }.get(model_name, model_name)
 
 
@@ -157,31 +163,6 @@ def _validate_reference_images(
             )
 
 
-def _images_to_batch(
-    images: dict[str, Any],
-) -> torch.Tensor | None:
-    """Convert separate image sockets into the IMAGE batch Kling expects."""
-    if not images:
-        return None
-
-    tensors = list(images.values())
-    shapes = {
-        tuple(tensor.shape[1:])
-        for tensor in tensors
-    }
-
-    if len(shapes) != 1:
-        raise ValueError(
-            "Kling receives reference images as one IMAGE batch. "
-            "All connected Kling reference images must have matching dimensions."
-        )
-
-    return torch.cat(
-        tensors,
-        dim=0,
-    )
-
-
 REFERENCE_VARIANTS = tuple([
     *_dynamic_variants(
         ByteDance2ReferenceNodeV2,
@@ -199,6 +180,7 @@ REFERENCE_VARIANTS = tuple([
     *_combo_variants(
         OmniProImageToVideoNode,
         selector_id="model_name",
+        allowed_models=frozenset({"kling-v3-omni"}),
         exclude=COMMON_EXCLUDE
         | {
             "reference_images",
@@ -210,6 +192,7 @@ REFERENCE_VARIANTS = tuple([
     *_combo_variants(
         OmniProVideoToVideoNode,
         selector_id="model_name",
+        allowed_models=frozenset({"kling-v3-omni"}),
         exclude=COMMON_EXCLUDE
         | {
             "reference_video",
@@ -217,6 +200,15 @@ REFERENCE_VARIANTS = tuple([
         },
         route="kling_video_reference",
         label=lambda name: f"{_kling_label(name)} · Video Reference",
+    ),
+
+    *_combo_variants(
+        OmniProEditVideoNode,
+        selector_id="model_name",
+        allowed_models=frozenset({"kling-v3-omni"}),
+        exclude=COMMON_EXCLUDE | {"video", "reference_images"},
+        route="kling_edit_video",
+        label=lambda name: f"{_kling_label(name)} · Edit Video",
     ),
 
     *_dynamic_variants(
@@ -272,46 +264,40 @@ def _inject_inputs(
         model["images"] = reference_images
         model["videos"] = reference_videos
 
-    elif variant.route == "kling_image_reference":
-        if reference_videos:
-            raise ValueError(
-                "Kling Image References does not accept video references. "
-                "Select the Kling Video Reference model instead."
+    elif variant.route.startswith("kling_"):
+        video_count = len(reference_videos)
+        needs_video = variant.route in {"kling_video_reference", "kling_edit_video"}
+        if video_count > 1:
+            raise KlingReferenceInputError(
+                "Kling 3.0 Omni accepts at most one video input. "
+                f"Received {video_count}."
             )
-
+        if not needs_video and video_count:
+            raise KlingReferenceInputError(
+                "Kling Image References does not accept a video input. "
+                "Select Video Reference or Edit Video."
+            )
+        if needs_video and video_count != 1:
+            raise KlingReferenceInputError(f"{variant.label} requires exactly one video input.")
         if reference_audios:
-            raise ValueError(
-                "Kling Omni does not support audio references."
+            raise KlingReferenceInputError("Kling Omni does not support audio references.")
+
+        image_limit = 4 if needs_video else 7
+        if len(reference_images) > image_limit:
+            raise KlingReferenceInputError(
+                f"{variant.label} accepts at most {image_limit} reference images. "
+                f"Received {len(reference_images)}."
             )
+        if not needs_video and not reference_images:
+            raise KlingReferenceInputError("Kling Image References requires at least one image.")
 
-        image_batch = _images_to_batch(reference_images)
-
-        if image_batch is None:
-            raise ValueError(
-                "Kling Image References requires at least one image."
-            )
-
-        params["reference_images"] = image_batch
-
-    elif variant.route == "kling_video_reference":
-        if reference_audios:
-            raise ValueError(
-                "Kling Omni does not support audio references."
-            )
-
-        if len(reference_videos) != 1:
-            raise ValueError(
-                "Kling Video Reference requires exactly one reference video."
-            )
-
-        params["reference_video"] = next(
-            iter(reference_videos.values())
-        )
-
-        image_batch = _images_to_batch(reference_images)
-
-        if image_batch is not None:
-            params["reference_images"] = image_batch
+        # Current Comfy upload/count helpers support a list of IMAGE tensors.
+        # Keep each Autogrow image separate; no resizing or concatenation needed.
+        if reference_images:
+            params["reference_images"] = list(reference_images.values())
+        if needs_video:
+            video_key = "video" if variant.route == "kling_edit_video" else "reference_video"
+            params[video_key] = next(iter(reference_videos.values()))
 
 
 class KASKIReferenceToVideoAPI(IO.ComfyNode):
@@ -418,6 +404,9 @@ class KASKIReferenceToVideoAPI(IO.ComfyNode):
                 seed,
                 "NO ERRORS TODAY - SUCCEEDED",
             )
+
+        except KlingReferenceInputError:
+            raise
 
         except Exception as error:
             log.warning(

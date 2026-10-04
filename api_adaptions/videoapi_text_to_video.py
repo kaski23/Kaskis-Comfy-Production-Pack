@@ -48,7 +48,6 @@ def _kling_label(model_name: str) -> str:
     """Convert Kling API model IDs into readable UI labels."""
     return {
         "kling-v3-omni": "Kling 3.0 Omni",
-        "kling-video-o1": "Kling Video O1",
     }.get(model_name, model_name)
 
 
@@ -63,6 +62,7 @@ TEXT_VARIANTS = tuple([
     *_combo_variants(
         OmniProTextToVideoNode,
         selector_id="model_name",
+        allowed_models=frozenset({"kling-v3-omni"}),
         exclude=COMMON_EXCLUDE,
         route="kling_text",
         label=_kling_label,

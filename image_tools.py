@@ -77,7 +77,7 @@ class ImagesInpaintOutpaint(IO.ComfyNode):
                 source_mask = source_mask[:batch]
 
         alpha = source_mask.unsqueeze(-1)
-        center = image * alpha + fill * (1 - alpha)
+        center = image * (1 - alpha) + fill * alpha
 
         output_image = torch.empty(
             (batch, height + top + bottom, width + left + right, 3),

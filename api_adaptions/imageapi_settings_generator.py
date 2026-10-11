@@ -6,48 +6,32 @@ built-in API nodes. KASKI owns only the shared settings, routing and outputs.
 Output contract (unchanged node IDs and socket positions):
     image, thoughts, thought_image, prompt, modelName, seed
 
-The last three outputs are strings suitable for the KASKI PNG saver.
+The prompt and modelName outputs are strings; seed is an INT.
 The seed is the value passed to the selected Comfy core node, not a promise
 that the remote service implements deterministic generation.
 
-Provider interfaces checked against Comfy-Org/ComfyUI master, 2026-09-16.
-Private upstream widget helpers are intentionally reused rather than forked.
-If a helper or execute signature changes, update this adapter, not the API
-implementation. This module makes no HTTP requests of its own.
+Provider interfaces checked against Comfy-Org/ComfyUI master, 2026-10-11.
+Upstream commit: 7f7fd918ed0815c5d5ef2ccfe44bfc8e72cfd217.
+Model lists, widgets and defaults are read from the installed core schemas.
+KASKI copies schema objects before adapting socket ownership. New model settings
+are passed through unchanged; execute signature changes still require an update. This module makes no HTTP requests of its own.
 """
 
 from __future__ import annotations
 
 import inspect
+from copy import deepcopy
 import traceback
 from typing import Any
 
 import torch
 
 from comfy_api.latest import IO, Input
-from comfy_api_nodes.apis.bytedance import (
-    RECOMMENDED_PRESETS_SEEDREAM_5_LITE,
-    RECOMMENDED_PRESETS_SEEDREAM_5_PRO,
-)
-from comfy_api_nodes.nodes_bfl import Flux2ImageNode, _flux2_model_inputs
-from comfy_api_nodes.nodes_bytedance import (
-    SEEDREAM_MODELS,
-    ByteDanceSeedreamNodeV3,
-    _seedream_model_inputs,
-)
-from comfy_api_nodes.nodes_gemini import (
-    GEMINI_IMAGE_SYS_PROMPT,
-    GeminiImage2,
-    GeminiNanoBanana2V2,
-    _nano_banana_2_v2_model_inputs,
-)
-from comfy_api_nodes.nodes_openai import (
-    GPT_IMAGE_25_QUALITIES,
-    GPT_IMAGE_QUALITIES,
-    OpenAIGPTImageNodeV2,
-    _gpt_image_2_model_inputs,
-    _gpt_image_legacy_model_inputs,
-)
+from comfy_api_nodes.nodes_bfl import Flux2ImageNode
+from comfy_api_nodes.nodes_bytedance import SEEDREAM_MODELS, ByteDanceSeedreamNodeV3
+from comfy_api_nodes.nodes_gemini import GeminiImage2, GeminiNanoBanana2V2
+from comfy_api_nodes.nodes_openai import OpenAIGPTImageNodeV2
+
 
 
 CATEGORY = "KASKI/api-adaptions/image"
@@ -64,17 +48,14 @@ SEEDREAM_LABEL = "ByteDance Seedream"
 FLUX2_LABEL = "Black Forest Labs FLUX.2"
 
 GEMINI_PRO = "Gemini 3 Pro Image"
+GEMINI_NB21 = "Gemini Nano Banana 2.1"
 GEMINI_NB2 = "Nano Banana 2 (Gemini 3.1 Flash Image)"
 GEMINI_NB2_LITE = "Nano Banana 2 Lite"
-
-GEMINI_BASE_RATIOS = [
-    "auto", "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4",
-    "9:16", "16:9", "21:9",
-]
 
 # These labels are translated by the current Gemini core implementations.
 # Keep the same names and IDs here only to record accurate provenance.
 GEMINI_MODEL_IDS = {
+    GEMINI_NB21: "gemini-nano-banana-2.1",
     "gemini-3-pro-image-preview": "gemini-3-pro-image",
     "Nano Banana 2 (Gemini 3.1 Flash Image)": "gemini-3.1-flash-image",
     "Nano Banana 2 Lite": "gemini-3.1-flash-lite-image",
@@ -138,6 +119,12 @@ async def _run_core(
     return await result if inspect.isawaitable(result) else result
 
 
+def _core_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Separate routing metadata from upstream execution arguments."""
+    return {key: value for key, value in settings.items()
+            if key not in {"provider", "core", "model"}}
+
+
 def _core_values(result: Any, expected: int, provider: str) -> tuple[Any, ...]:
     """Unwrap a core result without accidentally indexing an IMAGE tensor."""
     values = result.args if isinstance(result, IO.NodeOutput) else result
@@ -170,7 +157,7 @@ def _normalized_output(
         raise TypeError("Core thought_image must be a BHWC torch.Tensor.")
     if seed is None or seed == "":
         seed = -1
-        
+
     return IO.NodeOutput(
         image,
         "" if thoughts is None else str(thoughts),
@@ -193,138 +180,55 @@ def _model_id(provider: str, selected: str) -> str:
 
 
 
-def _openai_selector() -> Input:
-    return IO.DynamicCombo.Input(
-        "model_settings",
-        options=[
-            IO.DynamicCombo.Option(
-                "gpt-image-2.5-flare",
-                _without(
-                    _gpt_image_2_model_inputs(
-                        ("auto", "opaque", "transparent"),
-                        GPT_IMAGE_25_QUALITIES,
-                    ),
-                    "images",
-                    "mask",
-                ),
-            ),
-            IO.DynamicCombo.Option(
-                "gpt-image-2.5-sunburst",
-                _without(
-                    _gpt_image_2_model_inputs(
-                        ("auto", "opaque", "transparent"),
-                        GPT_IMAGE_25_QUALITIES,
-                    ),
-                    "images",
-                    "mask",
-                ),
-            ),
-            IO.DynamicCombo.Option(
-                "gpt-image-2",
-                _without(
-                    _gpt_image_2_model_inputs(
-                        ("auto", "opaque"),
-                        GPT_IMAGE_QUALITIES,
-                    ),
-                    "images",
-                    "mask",
-                ),
-            ),
-        ],
-    )
+# These sockets belong to the KASKI generator, never to provider settings.
+_GENERATOR_INPUTS = {"prompt", "seed", "images", "mask", "files"}
+
+
+def _core_input(core_node: type[IO.ComfyNode], input_id: str) -> Input:
+    """Copy an upstream widget; never mutate the provider's own schema."""
+    for widget in core_node.define_schema().inputs:
+        if widget.id == input_id:
+            return deepcopy(widget)
+    raise RuntimeError(f"{core_node.__name__} no longer defines input {input_id!r}.")
+
+
+def _settings_inputs(inputs: list[Input]) -> list[Input]:
+    """Strip generator sockets recursively, retaining upstream widget details."""
+    result = []
+    for widget in deepcopy(inputs):
+        if widget.id in _GENERATOR_INPUTS:
+            continue
+        if isinstance(widget, IO.DynamicCombo.Input):
+            for option in widget.options:
+                option.inputs = _settings_inputs(option.inputs)
+        result.append(widget)
+    return result
+
+
+def _model_selector(core_node: type[IO.ComfyNode]) -> Input:
+    selector = _core_input(core_node, "model")
+    if not isinstance(selector, IO.DynamicCombo.Input):
+        raise RuntimeError(f"{core_node.__name__}.model is no longer a DynamicCombo.")
+    selector.id = "model_settings"
+    return _settings_inputs([selector])[0]
+
+
+def _provider_extras(core_node: type[IO.ComfyNode]) -> list[Input]:
+    """Provider-level widgets not already owned by the shared KASKI UI."""
+    return _settings_inputs(_without(
+        core_node.define_schema().inputs, "model", "system_prompt"
+    ))
 
 
 def _gemini_selector() -> Input:
-    nb2 = _without(
-        _nano_banana_2_v2_model_inputs(["1K", "2K", "4K"]),
-        "images",
-        "files",
-    )
-    nb2_lite = _without(
-        _nano_banana_2_v2_model_inputs(["1K"]),
-        "images",
-        "files",
-    )
-
-    sampling = lambda: [
-        IO.Float.Input(
-            "temperature", default=1.0, min=0.0, max=2.0, step=0.01,
-            advanced=True,
-        ),
-        IO.Float.Input(
-            "top_p", default=0.95, min=0.0, max=1.0, step=0.01,
-            advanced=True,
-        ),
-    ]
-
-    return IO.DynamicCombo.Input(
-        "model_settings",
-        options=[
-            IO.DynamicCombo.Option(
-                GEMINI_PRO,
-                [
-                    IO.Combo.Input(
-                        "aspect_ratio",
-                        options=GEMINI_BASE_RATIOS,
-                        default="auto",
-                    ),
-                    IO.Combo.Input(
-                        "resolution",
-                        options=["1K", "2K", "4K"],
-                        default="2K",
-                    ),
-                ],
-            ),
-            IO.DynamicCombo.Option(GEMINI_NB2, [*nb2, *sampling()]),
-            IO.DynamicCombo.Option(GEMINI_NB2_LITE, [*nb2_lite, *sampling()]),
-        ],
-    )
-
-
-def _seedream_selector() -> Input:
-    pro = _without(
-        _seedream_model_inputs(
-            max_ref_images=10,
-            presets=RECOMMENDED_PRESETS_SEEDREAM_5_PRO,
-            max_width=3136,
-            max_height=2496,
-            supports_batch=False,
-            supports_fast=True,
-        ),
-        "images",
-    )
-    lite = _without(
-        _seedream_model_inputs(
-            max_ref_images=14,
-            presets=RECOMMENDED_PRESETS_SEEDREAM_5_LITE,
-            supports_batch=True,
-        ),
-        "images",
-    )
-
-    return IO.DynamicCombo.Input(
-        "model_settings",
-        options=[
-            IO.DynamicCombo.Option("seedream 5.0 pro", pro),
-            IO.DynamicCombo.Option("seedream 5.0 lite", lite),
-        ],
-    )
-
-
-def _flux2_selector() -> Input:
-    return IO.DynamicCombo.Input(
-        "model_settings",
-        options=[
-            IO.DynamicCombo.Option(
-                "Flux.2 [pro]",
-                _without(_flux2_model_inputs(), "images"),
-            ),
-            IO.DynamicCombo.Option(
-                "Flux.2 [max]",
-                _without(_flux2_model_inputs(), "images"),
-            ),
-        ],
-    )
+    selector = _model_selector(GeminiNanoBanana2V2)
+    # Sampling and any future provider-level settings belong to the NB branch.
+    extras = _without(_provider_extras(GeminiNanoBanana2V2), "response_modalities")
+    for option in selector.options:
+        option.inputs.extend(deepcopy(extras))
+    pro = _without(_provider_extras(GeminiImage2), "response_modalities")
+    selector.options.insert(0, IO.DynamicCombo.Option(GEMINI_PRO, pro))
+    return selector
 
 
 # -----------------------------------------------------------------------------
@@ -350,48 +254,34 @@ class KASKIImageAPISettings(IO.ComfyNode):
                         IO.DynamicCombo.Option(
                             OPENAI_LABEL,
                             [
-                                _openai_selector(),
-                                IO.Int.Input(
-                                    "n", default=1, min=1, max=8, step=1,
-                                    display_mode=IO.NumberDisplay.number,
-                                ),
+                                _model_selector(OpenAIGPTImageNodeV2),
+                                *_provider_extras(OpenAIGPTImageNodeV2),
                             ],
                         ),
                         IO.DynamicCombo.Option(
                             GEMINI_LABEL,
                             [
                                 _gemini_selector(),
-                                IO.Combo.Input(
-                                    "response_modalities",
-                                    options=["IMAGE", "IMAGE+TEXT"],
-                                    default="IMAGE",
-                                ),
+                                _core_input(GeminiNanoBanana2V2, "response_modalities"),
                             ],
                         ),
                         IO.DynamicCombo.Option(
                             SEEDREAM_LABEL,
                             [
-                                _seedream_selector(),
-                                IO.Boolean.Input(
-                                    "watermark", default=False, advanced=True,
-                                ),
-                                IO.Boolean.Input(
-                                    "thinking", default=True, advanced=True,
-                                ),
+                                _model_selector(ByteDanceSeedreamNodeV3),
+                                *_provider_extras(ByteDanceSeedreamNodeV3),
                             ],
                         ),
                         IO.DynamicCombo.Option(
                             FLUX2_LABEL,
-                            [_flux2_selector()],
+                            [
+                                _model_selector(Flux2ImageNode),
+                                *_provider_extras(Flux2ImageNode),
+                            ],
                         ),
                     ],
                 ),
-                IO.String.Input(
-                    "system_prompt",
-                    multiline=True,
-                    default=GEMINI_IMAGE_SYS_PROMPT,
-                    advanced=True,
-                ),
+                _core_input(GeminiNanoBanana2V2, "system_prompt"),
             ],
             outputs=[IO.Custom(SETTINGS_TYPE).Output(display_name="settings")],
         )
@@ -400,86 +290,46 @@ class KASKIImageAPISettings(IO.ComfyNode):
     def execute(
         cls,
         backend: dict[str, Any],
-        system_prompt: str,
+        system_prompt: str = "",
     ) -> IO.NodeOutput:
         provider = backend["backend"]
         ms = backend["model_settings"]
         model_name = ms["model_settings"]
 
+        # Keep every current/future model widget rather than enumerating fields.
+        model = {"model": model_name, **{
+            key: value for key, value in ms.items() if key != "model_settings"
+        }}
+        common = {
+            key: value for key, value in backend.items()
+            if key not in {"backend", "model_settings"}
+        }
+
         if provider == OPENAI_LABEL:
-            model = {
-                "model": model_name,
-                "size": ms["size"],
-                "background": ms["background"],
-                "quality": ms["quality"],
-            }
-            if "custom_width" in ms and "custom_height" in ms:
-                model |= {
-                    "custom_width": int(ms["custom_width"]),
-                    "custom_height": int(ms["custom_height"]),
-                }
             return IO.NodeOutput({
-                "provider": PROVIDER_OPENAI,
-                "model": model,
-                "n": int(backend["n"]),
+                **common, "provider": PROVIDER_OPENAI, "model": model,
             })
 
         if provider == GEMINI_LABEL:
-            if model_name == GEMINI_PRO:
-                model = {
-                    "model": "gemini-3-pro-image-preview",
-                    "aspect_ratio": ms["aspect_ratio"],
-                    "resolution": ms["resolution"],
-                }
-                core = GEMINI_PRO
-            else:
-                model = {
-                    "model": model_name,
-                    "aspect_ratio": ms["aspect_ratio"],
-                    "resolution": ms["resolution"],
-                    "thinking_level": ms["thinking_level"],
-                }
-                core = GEMINI_NB2
-
+            core = GEMINI_PRO if model_name == GEMINI_PRO else GEMINI_NB2
+            if core == GEMINI_PRO:
+                model["model"] = "gemini-3-pro-image-preview"
             return IO.NodeOutput({
+                **common,
                 "provider": PROVIDER_GEMINI,
                 "core": core,
                 "model": model,
-                "response_modalities": backend["response_modalities"],
                 "system_prompt": system_prompt,
-                "temperature": float(ms.get("temperature", 1.0)),
-                "top_p": float(ms.get("top_p", 0.95)),
             })
 
         if provider == SEEDREAM_LABEL:
-            model = {
-                "model": model_name,
-                "size_preset": ms["size_preset"],
-                "width": int(ms["width"]),
-                "height": int(ms["height"]),
-            }
-            if model_name == "seedream 5.0 pro":
-                model["prompt_optimization"] = ms.get("prompt_optimization", "standard")
-            elif model_name == "seedream 5.0 lite":
-                model |= {
-                    "max_images": int(ms.get("max_images", 1)),
-                    "fail_on_partial": bool(ms.get("fail_on_partial", False)),
-                }
             return IO.NodeOutput({
-                "provider": PROVIDER_SEEDREAM,
-                "model": model,
-                "watermark": bool(backend["watermark"]),
-                "thinking": bool(backend["thinking"]),
+                **common, "provider": PROVIDER_SEEDREAM, "model": model,
             })
 
         if provider == FLUX2_LABEL:
             return IO.NodeOutput({
-                "provider": PROVIDER_FLUX2,
-                "model": {
-                    "model": model_name,
-                    "width": int(ms["width"]),
-                    "height": int(ms["height"]),
-                },
+                **common, "provider": PROVIDER_FLUX2, "model": model,
             })
 
         raise ValueError(f"Unknown backend: {provider!r}")
@@ -563,8 +413,8 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     cls,
                     prompt=prompt,
                     model=model,
-                    n=settings["n"],
                     seed=effective_seed,
+                    **_core_settings(settings),
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(
@@ -578,14 +428,11 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                         GeminiImage2,
                         cls,
                         prompt=prompt,
-                        model=model["model"],
                         seed=effective_seed,
-                        aspect_ratio=model["aspect_ratio"],
-                        resolution=model["resolution"],
-                        response_modalities=settings["response_modalities"],
                         images=images,
                         files=files,
-                        system_prompt=settings["system_prompt"],
+                        **model,
+                        **_core_settings(settings),
                     )
                     image, text = _core_values(out, 2, provider)
                     return _normalized_output(
@@ -595,16 +442,19 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 model = dict(settings["model"])
                 model["images"] = image_group
                 model["files"] = files
+                # Sampling widgets are top-level arguments in the core API,
+                # but nested under each model in the KASKI settings UI.
+                extra_ids = {widget.id for widget in
+                             _provider_extras(GeminiNanoBanana2V2)}
+                extras = {key: model.pop(key) for key in list(model)
+                          if key in extra_ids}
                 out = await _run_core(
                     GeminiNanoBanana2V2,
                     cls,
                     prompt=prompt,
                     model=model,
                     seed=effective_seed,
-                    response_modalities=settings["response_modalities"],
-                    system_prompt=settings["system_prompt"],
-                    temperature=settings["temperature"],
-                    top_p=settings["top_p"],
+                    **{**_core_settings(settings), **extras},
                 )
                 image, text, thought_image = _core_values(out, 3, provider)
                 return _normalized_output(
@@ -620,8 +470,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     prompt=prompt,
                     model=model,
                     seed=effective_seed,
-                    watermark=settings["watermark"],
-                    thinking=settings["thinking"],
+                    **_core_settings(settings),
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(
@@ -637,6 +486,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     prompt=prompt,
                     model=model,
                     seed=effective_seed,
+                    **_core_settings(settings),
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(

@@ -43,15 +43,14 @@ class GenerateDICTfromKV(IO.ComfyNode):
                         IO.DynamicCombo.Option(
                             "DICT",
                             [
-                                IO.Autogrow.Input(
-                                    "dicts",
-                                    template=IO.Autogrow.TemplatePrefix(
-                                        IO.Dict.Input("dict"),
-                                        prefix="dict",
-                                        min=1,
-                                        max=64,
-                                    ),
-                                ),
+                                IO.Dict.Input("dict0", optional=True),
+                                IO.Dict.Input("dict1", optional=True),
+                                IO.Dict.Input("dict2", optional=True),
+                                IO.Dict.Input("dict3", optional=True),
+                                IO.Dict.Input("dict4", optional=True),
+                                IO.Dict.Input("dict5", optional=True),
+                                IO.Dict.Input("dict6", optional=True),
+                                IO.Dict.Input("dict7", optional=True),
                             ],
                         ),
                     ],
@@ -139,11 +138,10 @@ class GenerateDICTfromKV(IO.ComfyNode):
         # --------------------------------------------------
 
         if mode == "DICT":
-            dicts = value_type["dicts"]
-
             merged_dict = {}
 
-            for current_dict in dicts.values():
+            for index in range(8):
+                current_dict = value_type.get(f"dict{index}")
                 if current_dict:
                     merged_dict.update(current_dict)
 

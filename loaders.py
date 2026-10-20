@@ -159,6 +159,9 @@ class LoadImageWithFilename(IO.ComfyNode):
 
         image_tensor, mask = core_loader.load_image(image)
 
+        if image_tensor.shape[1:3] != (64, 64) and mask.shape[-2:] == (64, 64):
+            mask = image_tensor.new_zeros(image_tensor.shape[:3])
+
         return IO.NodeOutput(
             image_tensor,
             os.path.basename(image_path),

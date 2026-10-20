@@ -26,34 +26,10 @@ class GenerateDICTfromKV(IO.ComfyNode):
                     multiline=False,
                 ),
 
-                IO.DynamicCombo.Input(
-                    "value_type",
-                    options=[
-                        IO.DynamicCombo.Option(
-                            "STRING",
-                            [
-                                IO.String.Input(
-                                    "value",
-                                    default="",
-                                    multiline=True,
-                                ),
-                            ],
-                        ),
-
-                        IO.DynamicCombo.Option(
-                            "DICT",
-                            [
-                                IO.Dict.Input("dict0", optional=True),
-                                IO.Dict.Input("dict1", optional=True),
-                                IO.Dict.Input("dict2", optional=True),
-                                IO.Dict.Input("dict3", optional=True),
-                                IO.Dict.Input("dict4", optional=True),
-                                IO.Dict.Input("dict5", optional=True),
-                                IO.Dict.Input("dict6", optional=True),
-                                IO.Dict.Input("dict7", optional=True),
-                            ],
-                        ),
-                    ],
+                IO.String.Input(
+                    "value",
+                    default="",
+                    multiline=True,
                 ),
             ],
 
@@ -110,46 +86,53 @@ class GenerateDICTfromKV(IO.ComfyNode):
     def execute(
         cls,
         key: str,
-        value_type: dict,
+        value: str,
     ) -> IO.NodeOutput:
-
         key = key.strip()
-
         if not key:
             return IO.NodeOutput({})
 
-        mode = value_type["value_type"]
+        return IO.NodeOutput({key: cls.parse_json_or_string(value)})
 
-        # --------------------------------------------------
-        # STRING MODE
-        # --------------------------------------------------
 
-        if mode == "STRING":
-            value = value_type["value"]
+class GenerateDictOfDicts(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="GenerateDictOfDicts_KASKI",
+            display_name="Generate Dict of Dicts (JSON-Tools)",
+            category="KASKI/jsontools",
+            inputs=[
+                IO.String.Input("key", default="", multiline=False),
+                IO.Autogrow.Input(
+                    "dicts",
+                    template=IO.Autogrow.TemplatePrefix(
+                        IO.Dict.Input("dict"),
+                        prefix="dict",
+                        min=1,
+                        max=64,
+                    ),
+                ),
+            ],
+            outputs=[IO.Dict.Output(display_name="KeyValue-Dict")],
+        )
 
-            parsed_value = cls.parse_json_or_string(value)
+    @classmethod
+    def execute(
+        cls,
+        key: str,
+        dicts: IO.Autogrow.Type,
+    ) -> IO.NodeOutput:
+        key = key.strip()
+        if not key:
+            return IO.NodeOutput({})
 
-            return IO.NodeOutput({
-                key: parsed_value
-            })
+        merged_dict = {}
+        for current_dict in dicts.values():
+            if current_dict:
+                merged_dict.update(current_dict)
 
-        # --------------------------------------------------
-        # DICT MODE
-        # --------------------------------------------------
-
-        if mode == "DICT":
-            merged_dict = {}
-
-            for index in range(8):
-                current_dict = value_type.get(f"dict{index}")
-                if current_dict:
-                    merged_dict.update(current_dict)
-
-            return IO.NodeOutput({
-                key: merged_dict
-            })
-
-        return IO.NodeOutput({})
+        return IO.NodeOutput({key: merged_dict})
 
 
 class GenerateJSONfromDICT(IO.ComfyNode):
@@ -451,6 +434,7 @@ class NumberToString(IO.ComfyNode):
 
 STRING_TOOLS_NODES_LIST = [
     GenerateDICTfromKV,
+    GenerateDictOfDicts,
     GenerateJSONfromDICT,
     JsonStringTool,
     StringSplitAtSymbol,

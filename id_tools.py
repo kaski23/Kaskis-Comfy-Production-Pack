@@ -8,10 +8,27 @@ from comfy_api.latest import IO
 # Shared constants and helpers
 # ---------------------------------------------------------------------------
 
+# References
+REFERENCE_TYPES = [
+    "location",
+    "prop",
+    "character",
+    "material",
+]
+
+REFERENCE_TYPE_PATTERN = "|".join(map(re.escape, REFERENCE_TYPES))
+
 REGEX_REFERENCE_ID = re.compile(
-    r"(?:[A-Za-z0-9-]+_)?(?:character|prop|location|material)_[A-Za-z0-9-]+_(?:[A-Za-z0-9-]+_)?v(?:[0-9]+|N)"
+    r"(?<![A-Za-z0-9-])"
+    rf"(?:(?P<project_name>(?!(?:{REFERENCE_TYPE_PATTERN})_)[A-Za-z0-9-]+)_)?"
+    rf"(?P<reference_type>{REFERENCE_TYPE_PATTERN})_"
+    rf"(?P<reference_name>[A-Za-z0-9-]+)"
+    rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
+    rf"(?P<version>v(?:[0-9]+|N))"
 )
 
+
+# Shots
 SHOT_STAGES = [
     "firstFrame",
     "lastFrame",
@@ -27,17 +44,15 @@ SHOT_STAGES = [
     "enhanced",
 ]
 
-STAGE_PATTERN = "|".join(map(re.escape, SHOT_STAGES))
+SHOT_STAGE_PATTERN = "|".join(map(re.escape, SHOT_STAGES))
 
-REGEX_ID = re.compile(
+REGEX_SHOT_ID = re.compile(
     rf"(?:(?P<project_name>[A-Za-z0-9-]+)_)?"
     rf"(?P<shot>sh[0-9]+)_"
-    rf"(?P<pipeline_step>{STAGE_PATTERN})"
+    rf"(?P<pipeline_step>{SHOT_STAGE_PATTERN})"
     rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
     rf"(?P<version>v(?:[0-9]+|N))"
 )
-
-ID_COMPONENT_REGEX = re.compile(r"[A-Za-z0-9-]+")
 
 CATEGORY = "KASKI/ID-Tools"
 
@@ -53,24 +68,45 @@ class GenerateReferenceID(IO.ComfyNode):
             node_id="GenerateReferenceID_KASKI",
             display_name="Generate Reference ID",
             category=CATEGORY,
+            description="Build a reference ID from a type and name, with an optional project prefix and artist code.",
             inputs=[
-                IO.String.Input("project_name", default="NONE"),
+                IO.String.Input(
+                    "project_name",
+                    default="NONE",
+                    tooltip=(
+                        "Optional project prefix. Use NONE or leave blank to omit it. "
+                        f"Reserved names are {', '.join(REFERENCE_TYPES)}."
+                    ),
+                ),
                 IO.Combo.Input(
                     "reference_type",
-                    options=["character", "prop", "location", "material"],
+                    options=REFERENCE_TYPES,
+                    tooltip="The kind of asset this reference describes.",
                 ),
-                IO.String.Input("reference_name", default=""),
-                IO.String.Input("artist_code", default="NONE"),
+                IO.String.Input(
+                    "reference_name",
+                    default="",
+                    tooltip="Required asset name. Use hyphens to separate words.",
+                ),
+                IO.String.Input(
+                    "artist_code",
+                    default="NONE",
+                    tooltip="Optional artist code. Use NONE or leave blank to omit it.",
+                ),
                 IO.Int.Input(
                     "version",
                     default=-1,
                     min=-1,
                     max=10000,
                     step=1,
+                    tooltip="Numeric version. Use -1 to output vN.",
                 ),
             ],
             outputs=[
-                IO.String.Output(display_name="generated ID"),
+                IO.String.Output(
+                    display_name="generated ID",
+                    tooltip="Generated reference ID.",
+                ),
             ],
         )
 
@@ -86,6 +122,11 @@ class GenerateReferenceID(IO.ComfyNode):
         project_name = project_name.strip()
         reference_name = reference_name.strip()
         artist_code = artist_code.strip()
+
+        if project_name in REFERENCE_TYPES:
+            raise ValueError(
+                f"KASKI-Nodes: project_name {project_name} is reserved as a reference type."
+            )
 
         if "_" in project_name:
             raise ValueError(
@@ -145,6 +186,72 @@ class GenerateReferenceID(IO.ComfyNode):
 
 
 # ---------------------------------------------------------------------------
+# Reference ID: Modify
+# ---------------------------------------------------------------------------
+
+class ModifyReferenceID(IO.ComfyNode):
+    @classmethod
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="ModifyReferenceID_KASKI",
+            display_name="Modify Reference ID",
+            category=CATEGORY,
+            description="Update the artist code or version of an existing reference ID.",
+            inputs=[
+                IO.String.Input(
+                    "idx",
+                    tooltip="Complete reference ID to modify.",
+                ),
+                IO.String.Input(
+                    "artist_code",
+                    default="KEEP",
+                    tooltip="Use KEEP to retain the artist code, NONE or blank to remove it, or enter a new one.",
+                ),
+                IO.Combo.Input(
+                    "version",
+                    options=["Keep", "Increment"],
+                    tooltip="Keep the version or add 1 to a numeric version. vN stays vN.",
+                ),
+            ],
+            outputs=[
+                IO.String.Output(
+                    display_name="modified ID",
+                    tooltip="Updated reference ID, or the original input if it is not a complete reference ID.",
+                ),
+            ],
+        )
+
+    @classmethod
+    def execute(
+        cls,
+        idx: str,
+        artist_code: str,
+        version: str,
+    ) -> IO.NodeOutput:
+        match = REGEX_REFERENCE_ID.fullmatch(idx)
+        if not match:
+            return IO.NodeOutput(idx)
+
+        artist_code = artist_code.strip()
+        if artist_code == "KEEP":
+            artist_code = match.group("artist_code")
+        elif artist_code in ("", "NONE"):
+            artist_code = None
+        elif not re.fullmatch(r"[A-Za-z0-9-]+", artist_code):
+            raise ValueError(
+                f"KASKI-Nodes: artist_code {artist_code} may only contain letters, numbers and hyphens."
+            )
+
+        version_string = match.group("version")
+        if version == "Increment" and version_string != "vN":
+            version_string = f"v{int(version_string[1:]) + 1}"
+
+        reference_prefix = idx[:match.end("reference_name")]
+        artist_string = f"_{artist_code}" if artist_code else ""
+        return IO.NodeOutput(f"{reference_prefix}{artist_string}_{version_string}")
+
+
+# ---------------------------------------------------------------------------
 # Reference ID: Extract
 # ---------------------------------------------------------------------------
 
@@ -155,12 +262,23 @@ class ExtractReferenceID(IO.ComfyNode):
             node_id="ExtractReferenceID_KASKI",
             display_name="Extract Reference ID",
             category=CATEGORY,
+            description="Find the first reference ID in text such as a filename or path.",
             inputs=[
-                IO.String.Input("text"),
-                IO.Boolean.Input("fail_if_not_found", default=True),
+                IO.String.Input(
+                    "text",
+                    tooltip="Text, filename or path to search for an ID.",
+                ),
+                IO.Boolean.Input(
+                    "fail_if_not_found",
+                    default=True,
+                    tooltip="Raise an error if no ID is found. Disable to return the original text.",
+                ),
             ],
             outputs=[
-                IO.String.Output(display_name="extracted ID"),
+                IO.String.Output(
+                    display_name="extracted ID",
+                    tooltip="First matching ID, or the original text if no match is found and errors are disabled.",
+                ),
             ],
         )
 
@@ -194,26 +312,38 @@ class GenerateShotID(IO.ComfyNode):
             node_id="GenerateShotID_KASKI",
             display_name="Generate Shot ID",
             category=CATEGORY,
+            description="Build a shot ID from a shot number and pipeline step, with an optional project prefix and artist code.",
             inputs=[
-                IO.String.Input("project_name", default="NONE"),
+                IO.String.Input(
+                    "project_name",
+                    default="NONE",
+                    tooltip="Optional project prefix. Use NONE or leave blank to omit it.",
+                ),
                 IO.Int.Input(
                     "shot_no",
                     default=0,
                     min=0,
                     max=10000,
                     step=1,
+                    tooltip="Numeric part of the shot ID. For example, 7 becomes sh007 with padding set to 3.",
                 ),
                 IO.Combo.Input(
                     "pipeline_step",
                     options=SHOT_STAGES,
+                    tooltip="Pipeline step to include in the shot ID.",
                 ),
-                IO.String.Input("artist_code", default="NONE"),
+                IO.String.Input(
+                    "artist_code",
+                    default="NONE",
+                    tooltip="Optional artist code. Use NONE or leave blank to omit it.",
+                ),
                 IO.Int.Input(
                     "version",
                     default=-1,
                     min=-1,
                     max=10000,
                     step=1,
+                    tooltip="Numeric version. Use -1 to output vN.",
                 ),
                 IO.Int.Input(
                     "shot_no_zero_padding",
@@ -221,10 +351,14 @@ class GenerateShotID(IO.ComfyNode):
                     min=0,
                     max=15,
                     step=1,
+                    tooltip="Minimum number of digits in the shot number. Use 0 for no padding.",
                 ),
             ],
             outputs=[
-                IO.String.Output(display_name="generated ID"),
+                IO.String.Output(
+                    display_name="generated ID",
+                    tooltip="Generated shot ID.",
+                ),
             ],
         )
 
@@ -243,7 +377,7 @@ class GenerateShotID(IO.ComfyNode):
 
         if (
             project_name not in ("", "NONE")
-            and not ID_COMPONENT_REGEX.fullmatch(project_name)
+            and not re.fullmatch(r"[A-Za-z0-9-]+", project_name)
         ):
             raise ValueError(
                 f"KASKI-Nodes: project_name {project_name} may only contain letters, numbers and hyphens."
@@ -251,7 +385,7 @@ class GenerateShotID(IO.ComfyNode):
 
         if (
             artist_code not in ("", "NONE")
-            and not ID_COMPONENT_REGEX.fullmatch(artist_code)
+            and not re.fullmatch(r"[A-Za-z0-9-]+", artist_code)
         ):
             raise ValueError(
                 f"KASKI-Nodes: artist_code {artist_code} may only contain letters, numbers and hyphens."
@@ -294,24 +428,39 @@ class ModifyShotID(IO.ComfyNode):
             node_id="ModifyShotID_KASKI",
             display_name="Modify Shot ID",
             category=CATEGORY,
+            description="Update parts of an existing shot ID. Text that is not a complete shot ID passes through unchanged.",
             inputs=[
-                IO.String.Input("idx"),
-                IO.String.Input("project_name", default="KEEP"),
+                IO.String.Input(
+                    "idx",
+                    tooltip="Complete shot ID to modify.",
+                ),
+                IO.String.Input(
+                    "project_name",
+                    default="KEEP",
+                    tooltip="Use KEEP to retain the project prefix, NONE or blank to remove it, or enter a new one.",
+                ),
                 IO.Int.Input(
                     "shot_no",
                     default=-1,
                     min=-1,
                     max=10000,
                     step=1,
+                    tooltip="New shot number. Use -1 to retain the existing shot number and its padding.",
                 ),
                 IO.Combo.Input(
                     "pipeline_step",
                     options=["KEEP", *SHOT_STAGES],
+                    tooltip="New pipeline step. Use KEEP to retain the existing one.",
                 ),
-                IO.String.Input("artist_code", default="KEEP"),
+                IO.String.Input(
+                    "artist_code",
+                    default="KEEP",
+                    tooltip="Use KEEP to retain the artist code, NONE or blank to remove it, or enter a new one.",
+                ),
                 IO.Combo.Input(
                     "version",
                     options=["Keep", "Increment"],
+                    tooltip="Keep the version or add 1 to a numeric version. vN stays vN.",
                 ),
                 IO.Int.Input(
                     "shot_no_zero_padding",
@@ -319,10 +468,14 @@ class ModifyShotID(IO.ComfyNode):
                     min=0,
                     max=15,
                     step=1,
+                    tooltip="Minimum number of digits when replacing the shot number. Use 0 for no padding.",
                 ),
             ],
             outputs=[
-                IO.String.Output(display_name="modified ID"),
+                IO.String.Output(
+                    display_name="modified ID",
+                    tooltip="Updated shot ID, or the original input if it is not a complete shot ID.",
+                ),
             ],
         )
 
@@ -337,7 +490,7 @@ class ModifyShotID(IO.ComfyNode):
         version: str,
         shot_no_zero_padding: int,
     ) -> IO.NodeOutput:
-        if not REGEX_ID.fullmatch(idx):
+        if not REGEX_SHOT_ID.fullmatch(idx):
             return IO.NodeOutput(idx)
 
         project_name = project_name.strip()
@@ -345,7 +498,7 @@ class ModifyShotID(IO.ComfyNode):
 
         if (
             project_name not in ("", "NONE")
-            and not ID_COMPONENT_REGEX.fullmatch(project_name)
+            and not re.fullmatch(r"[A-Za-z0-9-]+", project_name)
         ):
             raise ValueError(
                 f"KASKI-Nodes: project_name {project_name} may only contain letters, numbers and hyphens."
@@ -353,13 +506,13 @@ class ModifyShotID(IO.ComfyNode):
 
         if (
             artist_code not in ("", "NONE")
-            and not ID_COMPONENT_REGEX.fullmatch(artist_code)
+            and not re.fullmatch(r"[A-Za-z0-9-]+", artist_code)
         ):
             raise ValueError(
                 f"KASKI-Nodes: artist_code {artist_code} may only contain letters, numbers and hyphens."
             )
 
-        match = REGEX_ID.fullmatch(idx)
+        match = REGEX_SHOT_ID.fullmatch(idx)
 
         if not match:
             raise ValueError(
@@ -434,12 +587,23 @@ class ExtractShotID(IO.ComfyNode):
             node_id="ExtractShotID_KASKI",
             display_name="Extract Shot ID",
             category=CATEGORY,
+            description="Find the first shot ID in text such as a filename or path.",
             inputs=[
-                IO.String.Input("text"),
-                IO.Boolean.Input("fail_if_not_found", default=True),
+                IO.String.Input(
+                    "text",
+                    tooltip="Text, filename or path to search for an ID.",
+                ),
+                IO.Boolean.Input(
+                    "fail_if_not_found",
+                    default=True,
+                    tooltip="Raise an error if no ID is found. Disable to return the original text.",
+                ),
             ],
             outputs=[
-                IO.String.Output(display_name="extracted ID"),
+                IO.String.Output(
+                    display_name="extracted ID",
+                    tooltip="First matching ID, or the original text if no match is found and errors are disabled.",
+                ),
             ],
         )
 
@@ -449,7 +613,7 @@ class ExtractShotID(IO.ComfyNode):
         text: str,
         fail_if_not_found: bool,
     ) -> IO.NodeOutput:
-        match = REGEX_ID.search(text)
+        match = REGEX_SHOT_ID.search(text)
 
         if not match:
             if fail_if_not_found:
@@ -468,6 +632,7 @@ class ExtractShotID(IO.ComfyNode):
 
 ID_TOOLS_NODES_LIST = [
     GenerateReferenceID,
+    ModifyReferenceID,
     ExtractReferenceID,
     GenerateShotID,
     ModifyShotID,

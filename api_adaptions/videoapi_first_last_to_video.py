@@ -9,7 +9,7 @@ from typing import Any
 from comfy_api.latest import IO
 
 from comfy_api_nodes.nodes_bytedance import ByteDance2FirstLastFrameNode
-from comfy_api_nodes.nodes_kling import OmniProFirstLastFrameNode
+from comfy_api_nodes.nodes_kling import Kling4ImageToVideoNode, OmniProFirstLastFrameNode
 
 from .videoapi_common import (
     CATEGORY,
@@ -49,7 +49,7 @@ LAST_FRAME_TOOLTIP = (
 )
 
 MODEL_TOOLTIP = (
-    "Seedance and Kling Omni support first/last-frame generation."
+    "Seedance, Kling 4.0 and Kling Omni support first/last-frame generation."
 )
 
 
@@ -75,6 +75,13 @@ FIRST_LAST_VARIANTS = tuple([
         exclude=COMMON_EXCLUDE | {"first_frame", "end_frame"},
         route="kling_first_last",
         label=_kling_label,
+    ),
+    *_dynamic_variants(
+        Kling4ImageToVideoNode,
+        selector_id="model",
+        exclude=COMMON_EXCLUDE | {"first_frame", "last_frame", "middle_frames"},
+        route="kling4_first_last",
+        label=lambda name: "Kling 4.0",
     ),
 ])
 
@@ -109,6 +116,17 @@ def _inject_inputs(
     last_frame: Any,
 ) -> None:
     """Map shared first/last-frame inputs to the selected provider."""
+    if variant.route == "kling4_first_last":
+        model = params[variant.selector_id]
+        _autogrow_images_to_list({"first_frame": first_frame, "last_frame": last_frame})
+        if first_frame is None and last_frame is None:
+            raise ValueError("Kling 4.0 requires at least one first/last frame.")
+        model.update(
+            prompt=prompt, seed=seed, first_frame=first_frame,
+            last_frame=last_frame, middle_frames={},
+        )
+        return
+
     if variant.route.startswith("seedance_"):
         params[variant.selector_id]["prompt"] = prompt
     elif variant.route.startswith("kling_"):
@@ -135,7 +153,7 @@ class KASKIFirstLastFrameToVideoAPI(IO.ComfyNode):
             display_name="KASKI First / Last Frame to Video API",
             category=CATEGORY,
             description=(
-                "Unified first/last-frame wrapper over Seedance and Kling Omni."
+                "Unified first/last-frame wrapper over Seedance, Kling 4.0 and Kling Omni."
             ),
 
             inputs=[

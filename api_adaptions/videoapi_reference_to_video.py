@@ -11,6 +11,8 @@ from comfy_api.latest import IO
 
 from comfy_api_nodes.nodes_bytedance import ByteDance2ReferenceNodeV2
 from comfy_api_nodes.nodes_kling import (
+    Kling4EditVideoNode,
+    Kling4ReferenceToVideoNode,
     OmniProEditVideoNode,
     OmniProImageToVideoNode,
     OmniProVideoToVideoNode,
@@ -52,19 +54,22 @@ SEED_TOOLTIP = (
 MODEL_TOOLTIP = (
     "Seedance supports image/video/audio references. Gemini supports "
     "image/video references. Kling supports image-reference or "
-    "video-reference and edit routes, but no audio references."
+    "video-reference and edit routes. Kling 4.0 supports up to 10 images "
+    "and 5 videos, but no audio references."
 )
 
 REFERENCE_IMAGES_TOOLTIP = (
     "Image references. Seedance 2.5: up to 30; Seedance 2.0: 9; "
-    "Gemini Omni: 14; Kling: 7 in image mode / 4 with a video. "
+    "Gemini Omni: 14; Kling 3.0: 7 in image mode / 4 with a video; "
+    "Kling 4.0: 10. "
     "One image per socket; IMAGE batches are rejected."
 )
 
 REFERENCE_VIDEOS_TOOLTIP = (
     "Video references. Seedance 2.5: up to 10; Seedance 2.0: 3; "
     "Gemini Omni: 3; Kling Image References: 0; "
-    "Kling Video Reference / Edit Video: exactly 1."
+    "Kling 3.0 Video Reference / Edit Video: exactly 1; "
+    "Kling 4.0: up to 5 (Edit Video uses the first as its base video)."
 )
 
 REFERENCE_AUDIOS_TOOLTIP = (
@@ -212,6 +217,22 @@ REFERENCE_VARIANTS = tuple([
     ),
 
     *_dynamic_variants(
+        Kling4ReferenceToVideoNode,
+        selector_id="model",
+        exclude=COMMON_EXCLUDE | {"reference_images", "reference_videos", "first_frame", "last_frame"},
+        route="kling4_reference",
+        label=lambda name: "Kling 4.0 · References",
+    ),
+
+    *_dynamic_variants(
+        Kling4EditVideoNode,
+        selector_id="model",
+        exclude=COMMON_EXCLUDE | {"video_1", "reference_images", "reference_videos"},
+        route="kling4_edit_video",
+        label=lambda name: "Kling 4.0 · Edit Video",
+    ),
+
+    *_dynamic_variants(
         GeminiVideoOmni,
         selector_id="model",
         exclude=COMMON_EXCLUDE
@@ -241,6 +262,29 @@ def _inject_inputs(
     reference_audios: dict[str, Any],
 ) -> None:
     """Map shared reference inputs to the selected provider."""
+    if variant.route.startswith("kling4_"):
+        if reference_audios:
+            raise KlingReferenceInputError("Kling 4.0 does not support audio references.")
+        if len(reference_videos) > 5:
+            raise KlingReferenceInputError("Kling 4.0 accepts at most 5 videos in total.")
+        model = params[variant.selector_id]
+        if len(reference_images) > 10:
+            raise KlingReferenceInputError("Kling 4.0 accepts at most 10 reference images.")
+        model.update(prompt=prompt, seed=seed, reference_images=reference_images)
+        videos = list(reference_videos.values())
+        if variant.route == "kling4_edit_video":
+            if not videos:
+                raise KlingReferenceInputError("Kling 4.0 Edit Video requires a base video in the first video socket.")
+            model["video_1"] = videos[0]
+            model["reference_videos"] = {f"video_{index}": video for index, video in enumerate(videos[1:], 2)}
+        else:
+            if not reference_images and not videos:
+                raise KlingReferenceInputError("Kling 4.0 References requires at least one image or video.")
+            model["first_frame"] = None
+            model["last_frame"] = None
+            model["reference_videos"] = {f"video_{index}": video for index, video in enumerate(videos, 1)}
+        return
+
     if variant.route.startswith("seedance_") or variant.route.startswith("gemini_"):
         params[variant.selector_id]["prompt"] = prompt
     elif variant.route.startswith("kling_"):
@@ -309,7 +353,7 @@ class KASKIReferenceToVideoAPI(IO.ComfyNode):
             display_name="KASKI Reference to Video API",
             category=CATEGORY,
             description=(
-                "Unified reference-to-video wrapper over Seedance, Kling Omni "
+                "Unified reference-to-video wrapper over Seedance, Kling 4.0, Kling Omni "
                 "and Gemini Omni."
             ),
 

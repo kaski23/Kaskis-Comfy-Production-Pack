@@ -8,7 +8,7 @@ from typing import Any
 from comfy_api.latest import IO
 
 from comfy_api_nodes.nodes_bytedance import ByteDance2TextToVideoNode
-from comfy_api_nodes.nodes_kling import OmniProTextToVideoNode
+from comfy_api_nodes.nodes_kling import Kling4TextToVideoNode, OmniProTextToVideoNode
 from comfy_api_nodes.nodes_gemini import GeminiVideoOmni
 
 from .videoapi_common import (
@@ -40,7 +40,7 @@ SEED_TOOLTIP = (
 )
 
 MODEL_TOOLTIP = (
-    "Seedance, Kling Omni and Gemini Omni all support text-to-video."
+    "Seedance, Kling 4.0, Kling Omni and Gemini Omni all support text-to-video."
 )
 
 
@@ -68,6 +68,13 @@ TEXT_VARIANTS = tuple([
         label=_kling_label,
     ),
     *_dynamic_variants(
+        Kling4TextToVideoNode,
+        selector_id="model",
+        exclude=COMMON_EXCLUDE,
+        route="kling4_text",
+        label=lambda name: "Kling 4.0",
+    ),
+    *_dynamic_variants(
         GeminiVideoOmni,
         selector_id="model",
         exclude=COMMON_EXCLUDE | {"images", "videos"},
@@ -90,6 +97,11 @@ def _inject_inputs(
     seed: int,
 ) -> None:
     """Map the shared KASKI inputs to the selected provider."""
+    if variant.route.startswith("kling4_"):
+        params[variant.selector_id]["prompt"] = prompt
+        params[variant.selector_id]["seed"] = seed
+        return
+
     if variant.route.startswith("seedance_") or variant.route.startswith("gemini_"):
         params[variant.selector_id]["prompt"] = prompt
     elif variant.route.startswith("kling_"):
@@ -107,7 +119,7 @@ class KASKITextToVideoAPI(IO.ComfyNode):
             display_name="KASKI Text to Video API",
             category=CATEGORY,
             description=(
-                "Unified text-to-video wrapper over Seedance, Kling Omni and "
+                "Unified text-to-video wrapper over Seedance, Kling 4.0, Kling Omni and "
                 "Gemini Omni."
             ),
 

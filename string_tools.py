@@ -91,6 +91,9 @@ class GenerateDICTfromKV(IO.ComfyNode):
         key = key.strip()
         if not key:
             return IO.NodeOutput({})
+        
+        if value == "" or value is None:
+            return IO.NodeOutput({})
 
         return IO.NodeOutput({key: cls.parse_json_or_string(value)})
 
@@ -177,81 +180,6 @@ class GenerateJSONfromDICT(IO.ComfyNode):
         )
 
         return IO.NodeOutput(json_string)
-
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# JSON String Tool - LEGACY
-# ---------------------------------------------------------------------------
-
-class JsonStringTool(IO.ComfyNode):
-    @classmethod
-    def define_schema(cls):
-        return IO.Schema(
-            node_id="JsonStringTool_KASKI",
-            display_name="JSON Key-Value String (LEGACY)",
-            category="KASKI/stringtools",
-            inputs=[
-                IO.String.Input(
-                    "key",
-                    default="",
-                    multiline=False,
-                ),
-                IO.String.Input(
-                    "value",
-                    default="",
-                    multiline=True,
-                ),
-                IO.Boolean.Input(
-                    "nested",
-                    default=False,
-                ),
-            ],
-            outputs=[
-                IO.String.Output(
-                    display_name="JSON-String",
-                ),
-            ],
-        )
-
-    @classmethod
-    def execute(
-        cls,
-        key: str,
-        value: str,
-        nested: bool,
-    ) -> IO.NodeOutput:
-        key = key.strip().strip('"').rstrip(":").strip()
-        value = value.strip()
-
-        if not key:
-            return IO.NodeOutput("")
-
-        # Value absichern
-        if not value:
-            value = '""'
-        else:
-            starts_structured = value[0] in ['"', '{', '[']
-            ends_structured = value[-1] in ['"', '}', ']']
-
-            if not starts_structured:
-                value = '"' + value
-
-            if not ends_structured:
-                value = value + '"'
-
-        # Nested wrapping
-        if nested:
-            if not value.startswith("{"):
-                value = "{\n" + value + "\n}"
-
-        json_string = f'"{key}": {value},\n'
-
-        return IO.NodeOutput(json_string)
-        
 
 
 
@@ -436,7 +364,6 @@ STRING_TOOLS_NODES_LIST = [
     GenerateDICTfromKV,
     GenerateDictOfDicts,
     GenerateJSONfromDICT,
-    JsonStringTool,
     StringSplitAtSymbol,
     JoinStrings,
     NumberToString,

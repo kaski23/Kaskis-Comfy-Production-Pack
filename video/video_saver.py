@@ -1033,8 +1033,3 @@ class SaveProRes(IO.ComfyNode):
                 "animated": (True,),
             },
         )
-
-
-PRORES_SAVER_NODE_LIST = [
-    SaveProRes,
-]

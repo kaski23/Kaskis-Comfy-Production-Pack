@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from comfy_api.latest import IO
 from comfy.utils import ProgressBar
 
-from .external_libraries.RIFE import (
+from ..external_libraries.RIFE import (
     calculate_optical_flow,
     interpolate_between_two_frames,
 )
@@ -1070,14 +1070,3 @@ class TemporalSmoother(IO.ComfyNode):
             output_images.contiguous(),
             motion_table,
         )
-
-
-# ---------------------------------------------------------------------------
-# V3 registration
-# ---------------------------------------------------------------------------
-
-VIDEO_TOOLS_NODES_LIST = [
-    ExtendVideo,
-    ShortenVideo,
-    TemporalSmoother,
-]

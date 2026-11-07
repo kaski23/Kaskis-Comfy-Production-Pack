@@ -2,13 +2,13 @@
 
 import torch
 
-from comfy_api.latest import IO
+from comfy_api.latest import ComfyExtension, io
 
 
-class ImagesInpaintOutpaint(IO.ComfyNode):
+class ImagesInpaintOutpaint(io.ComfyNode):
     @classmethod
     def define_schema(cls):
-        return IO.Schema(
+        return io.Schema(
             node_id="KASKI_InpaintOutpaintImages",
             display_name="Inpaint/Outpaint Images with Color",
             description=(
@@ -17,23 +17,23 @@ class ImagesInpaintOutpaint(IO.ComfyNode):
             ),
             category="KASKI/image",
             inputs=[
-                IO.Image.Input("image"),
-                IO.Float.Input("extend_top", default=0.0, min=0.0, max=1000.0, step=0.1),
-                IO.Float.Input("extend_bottom", default=0.0, min=0.0, max=1000.0, step=0.1),
-                IO.Float.Input("extend_left", default=0.0, min=0.0, max=1000.0, step=0.1),
-                IO.Float.Input("extend_right", default=0.0, min=0.0, max=1000.0, step=0.1),
-                IO.Color.Input("color", default="#000000"),
-                IO.Mask.Input("mask", optional=True),
+                io.Image.Input("image"),
+                io.Float.Input("extend_top", default=0.0, min=0.0, max=1000.0, step=0.1),
+                io.Float.Input("extend_bottom", default=0.0, min=0.0, max=1000.0, step=0.1),
+                io.Float.Input("extend_left", default=0.0, min=0.0, max=1000.0, step=0.1),
+                io.Float.Input("extend_right", default=0.0, min=0.0, max=1000.0, step=0.1),
+                io.Color.Input("color", default="#000000"),
+                io.Mask.Input("mask", optional=True),
             ],
             outputs=[
-                IO.Image.Output(display_name="image"),
-                IO.Mask.Output(display_name="mask"),
+                io.Image.Output(display_name="image"),
+                io.Mask.Output(display_name="mask"),
             ],
         )
 
     @classmethod
     def execute(cls, image, extend_top, extend_bottom, extend_left,
-                extend_right, color, mask=None) -> IO.NodeOutput:
+                extend_right, color, mask=None) -> io.NodeOutput:
         if image.ndim != 4 or image.shape[-1] != 3:
             raise ValueError("IMAGE must have shape [B, H, W, 3].")
 
@@ -91,9 +91,32 @@ class ImagesInpaintOutpaint(IO.ComfyNode):
             dtype=mask_dtype, device=image.device,
         )
         output_mask[:, top:top + height, left:left + width] = source_mask.to(mask_dtype)
-        return IO.NodeOutput(output_image, output_mask)
+        return io.NodeOutput(output_image, output_mask)
+        
+        
+        
+class CombineImagesToImageList(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        image_inputs = io.Autogrow.TemplatePrefix(
+            io.Image.Input("image"), prefix="image", min=1, max=50
+        )
+        return io.Schema(
+            node_id="KASKI_ImagesToList",
+            display_name="Create Image List",
+            category="KASKI/image",
+            description="Collects images in input order, preserving their sizes. "
+            "Each frame of an input batch becomes a separate list item.",
+            is_input_list=True,
+            inputs=[io.Autogrow.Input("images", template=image_inputs)],
+            outputs=[io.Image.Output("images", is_output_list=True)],
+        )
 
-
-IMAGE_TOOLS_NODES_LIST = [
-    ImagesInpaintOutpaint,
-]
+    @classmethod
+    def execute(cls, images: dict[str, list[io.Image.Type]]) -> io.NodeOutput:
+        image_list = []
+        for image_batches in images.values():
+            for batch in image_batches:
+                for index in range(batch.shape[0]):
+                    image_list.append(batch[index : index + 1])
+        return io.NodeOutput(image_list)

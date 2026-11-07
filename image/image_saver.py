@@ -82,7 +82,7 @@ def inject_reference_images(
     before IEND.
 
     Each krFI chunk contains one complete 8-bit PNG file. Chunk order
-    matches the frame order of the input_images IMAGE batch.
+    matches the frame order of the input_images tensors.
     """
     if not reference_pngs:
         return png_bytes
@@ -247,7 +247,7 @@ class SavePNGwithMetadata(IO.ComfyNode):
                 IO.Image.Input(
                     "input_images",
                     optional=True,
-                    tooltip="Optional IMAGE batch embedded into every saved PNG as 8-bit reference images.",
+                    tooltip="Optional images or batches embedded into every saved PNG as 8-bit references.",
                 ),
 
                 IO.String.Input(
@@ -288,9 +288,10 @@ class SavePNGwithMetadata(IO.ComfyNode):
                 IO.Hidden.prompt,
                 IO.Hidden.extra_pnginfo,
             ],
+            is_input_list=True,
             is_output_node=True,
             outputs=[
-                IO.Image.Output(display_name="images"),
+                IO.Image.Output(display_name="images", is_output_list=True),
             ],
         )
 
@@ -299,12 +300,43 @@ class SavePNGwithMetadata(IO.ComfyNode):
         cls,
         images,
         input_images=None,
-        filename_prefix="ComfyUI",
-        bit_depth="16-bit",
-        model_name="",
-        user_prompt="",
-        seed=-1,
+        filename_prefix=None,
+        bit_depth=None,
+        model_name=None,
+        user_prompt=None,
+        seed=None,
     ) -> IO.NodeOutput:
+        reference_pngs = []
+        if not args.disable_metadata:
+            for batch in input_images or []:
+                if batch is not None:
+                    reference_pngs.extend(tensor_to_png(batch, bit_depth=8))
+
+        options = (
+            filename_prefix or ["ComfyUI"],
+            bit_depth or ["16-bit"],
+            model_name or [""],
+            user_prompt or [""],
+            seed or [-1],
+        )
+        results = []
+        for index, batch in enumerate(images):
+            batch_options = (values[min(index, len(values) - 1)] for values in options)
+            results.extend(cls._save_batch(batch, reference_pngs, *batch_options))
+
+        return IO.NodeOutput(images, ui={"images": results})
+
+    @classmethod
+    def _save_batch(
+        cls,
+        images,
+        reference_pngs,
+        filename_prefix,
+        bit_depth,
+        model_name,
+        user_prompt,
+        seed,
+    ):
 
         # ---------------------------------------------------------------
         # Encode
@@ -316,14 +348,6 @@ class SavePNGwithMetadata(IO.ComfyNode):
             images,
             bit_depth=depth,
         )
-
-        reference_pngs = []
-
-        if input_images is not None and not args.disable_metadata:
-            reference_pngs = tensor_to_png(
-                input_images,
-                bit_depth=8,
-            )
 
         # ---------------------------------------------------------------
         # Output path
@@ -415,11 +439,4 @@ class SavePNGwithMetadata(IO.ComfyNode):
 
             counter += 1
 
-        return IO.NodeOutput(
-            images,
-            ui={"images": results},
-        )
-        
-IMAGE_SAVER_NODES_LIST = [
-    SavePNGwithMetadata,
-]
+        return results

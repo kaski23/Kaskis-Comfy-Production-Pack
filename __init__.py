@@ -13,6 +13,7 @@ from .api_adaptions import API_ADAPTIONS_NODES_LIST
 from .video import VIDEO_NODES_LIST
 from .input_conform import INPUT_CONFORM_NODES_LIST
 from .flow_control import FLOW_CONTROL_NODES_LIST
+from .json_tools import JSON_TOOLS_NODE_LIST
 
 #apply patches
 apply_comfy_patches()
@@ -37,6 +38,7 @@ class KaskisComfyNodes(ComfyExtension):
             *API_ADAPTIONS_NODES_LIST,
             *VIDEO_NODES_LIST,
             *FLOW_CONTROL_NODES_LIST,
+            *JSON_TOOLS_NODE_LIST
         ]
 
 async def comfy_entrypoint():

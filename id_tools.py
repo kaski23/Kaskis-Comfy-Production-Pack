@@ -1,12 +1,22 @@
-
 import re
 
 from comfy_api.latest import IO
 
 
-# ---------------------------------------------------------------------------
-# Shared constants and helpers
-# ---------------------------------------------------------------------------
+# ID Patterns
+ID_SUFFIX_PATTERN = (
+    r"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
+    r"(?P<version>v(?:[0-9]+|N))"
+)
+
+# Try an explicit version first. A ComfyUI counter like _00001_.png is a
+# filename suffix and can follow a versionless ID without an artist code.
+EXTRACT_ID_SUFFIX_PATTERN = (
+    rf"(?:{ID_SUFFIX_PATTERN}"
+    r"|(?:_(?![0-9]{5,}_\.)[A-Za-z0-9-]+)?(?![A-Za-z0-9-]))"
+)
+
+
 
 # References
 REFERENCE_TYPES = [
@@ -18,13 +28,16 @@ REFERENCE_TYPES = [
 
 REFERENCE_TYPE_PATTERN = "|".join(map(re.escape, REFERENCE_TYPES))
 
-REGEX_REFERENCE_ID = re.compile(
+REFERENCE_ID_BASE_PATTERN = (
     r"(?<![A-Za-z0-9-])"
     rf"(?:(?P<project_name>(?!(?:{REFERENCE_TYPE_PATTERN})_)[A-Za-z0-9-]+)_)?"
     rf"(?P<reference_type>{REFERENCE_TYPE_PATTERN})_"
     rf"(?P<reference_name>[A-Za-z0-9-]+)"
-    rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
-    rf"(?P<version>v(?:[0-9]+|N))"
+)
+
+REGEX_REFERENCE_ID = re.compile(REFERENCE_ID_BASE_PATTERN + ID_SUFFIX_PATTERN)
+REGEX_EXTRACT_REFERENCE_ID = re.compile(
+    REFERENCE_ID_BASE_PATTERN + EXTRACT_ID_SUFFIX_PATTERN
 )
 
 
@@ -32,8 +45,10 @@ REGEX_REFERENCE_ID = re.compile(
 SHOT_STAGES = [
     "firstFrame",
     "lastFrame",
+    "referenceFrame",
     "ffToCleanup",
     "lfToCleanup",
+    "rfToCleanup",
     "Depth",
     "Normal",
     "cgi",
@@ -46,13 +61,14 @@ SHOT_STAGES = [
 
 SHOT_STAGE_PATTERN = "|".join(map(re.escape, SHOT_STAGES))
 
-REGEX_SHOT_ID = re.compile(
+SHOT_ID_BASE_PATTERN = (
     rf"(?:(?P<project_name>[A-Za-z0-9-]+)_)?"
     rf"(?P<shot>sh[0-9]+)_"
     rf"(?P<pipeline_step>{SHOT_STAGE_PATTERN})"
-    rf"(?:_(?P<artist_code>[A-Za-z0-9-]+))?_"
-    rf"(?P<version>v(?:[0-9]+|N))"
 )
+
+REGEX_SHOT_ID = re.compile(SHOT_ID_BASE_PATTERN + ID_SUFFIX_PATTERN)
+REGEX_EXTRACT_SHOT_ID = re.compile(SHOT_ID_BASE_PATTERN + EXTRACT_ID_SUFFIX_PATTERN)
 
 CATEGORY = "KASKI/ID-Tools"
 
@@ -262,7 +278,10 @@ class ExtractReferenceID(IO.ComfyNode):
             node_id="ExtractReferenceID_KASKI",
             display_name="Extract Reference ID",
             category=CATEGORY,
-            description="Find the first reference ID in text such as a filename or path.",
+            description=(
+                "Find the first reference ID in text such as a filename or path. "
+                "Append vN if the version is missing."
+            ),
             inputs=[
                 IO.String.Input(
                     "text",
@@ -288,7 +307,7 @@ class ExtractReferenceID(IO.ComfyNode):
         text: str,
         fail_if_not_found: bool,
     ) -> IO.NodeOutput:
-        match = REGEX_REFERENCE_ID.search(text)
+        match = REGEX_EXTRACT_REFERENCE_ID.search(text)
 
         if not match:
             if fail_if_not_found:
@@ -298,7 +317,11 @@ class ExtractReferenceID(IO.ComfyNode):
             else:
                 return IO.NodeOutput(text)
 
-        return IO.NodeOutput(match.group(0))
+        extracted_id = match.group(0)
+        if match.group("version") is None:
+            extracted_id += "_vN"
+
+        return IO.NodeOutput(extracted_id)
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +610,10 @@ class ExtractShotID(IO.ComfyNode):
             node_id="ExtractShotID_KASKI",
             display_name="Extract Shot ID",
             category=CATEGORY,
-            description="Find the first shot ID in text such as a filename or path.",
+            description=(
+                "Find the first shot ID in text such as a filename or path. "
+                "Append vN if the version is missing."
+            ),
             inputs=[
                 IO.String.Input(
                     "text",
@@ -613,7 +639,7 @@ class ExtractShotID(IO.ComfyNode):
         text: str,
         fail_if_not_found: bool,
     ) -> IO.NodeOutput:
-        match = REGEX_SHOT_ID.search(text)
+        match = REGEX_EXTRACT_SHOT_ID.search(text)
 
         if not match:
             if fail_if_not_found:
@@ -623,7 +649,11 @@ class ExtractShotID(IO.ComfyNode):
             else:
                 return IO.NodeOutput(text)
 
-        return IO.NodeOutput(match.group(0))
+        extracted_id = match.group(0)
+        if match.group("version") is None:
+            extracted_id += "_vN"
+
+        return IO.NodeOutput(extracted_id)
 
 
 # ---------------------------------------------------------------------------

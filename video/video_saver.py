@@ -23,6 +23,9 @@ from comfy.utils import ProgressBar
 log = logging.getLogger(__name__)
 
 
+SDR_TRANSFER_TAGS = {"sRGB": "iec61966-2-1", "Rec.709": "bt709"}
+
+
 # ---------------------------------------------------------------------------
 # Codec configuration
 # ---------------------------------------------------------------------------
@@ -576,12 +579,11 @@ def write_temp_ffmetadata(metadata: dict[str, str]) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
-def resolve_output_path(
+def resolve_output_location(
     filename_prefix: str,
     images: torch.Tensor,
-) -> tuple[Path, str, str]:
+) -> tuple[Path, str, int, str]:
     output_dir = folder_paths.get_output_directory()
-
     full_output_folder, filename, counter, subfolder, _ = (
         folder_paths.get_save_image_path(
             filename_prefix,
@@ -590,15 +592,29 @@ def resolve_output_path(
             images.shape[1],
         )
     )
+    output_folder = Path(full_output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+    return output_folder, filename, counter, subfolder
 
-    os.makedirs(full_output_folder, exist_ok=True)
 
+def publish_output(
+    encoded_path: Path,
+    output_folder: Path,
+    filename: str,
+    counter: int,
+) -> Path:
     while True:
-        file = f"{filename}_{counter:05}_.mov"
-        path = Path(full_output_folder) / file
-        if not path.exists():
-            return path, file, subfolder
-        counter += 1
+        output_path = output_folder / f"{filename}_{counter:05}_.mov"
+        try:
+            # Windows rename fails when the destination exists. On POSIX,
+            # linking gives us the same atomic, no-overwrite behavior.
+            if os.name == "nt":
+                encoded_path.rename(output_path)
+            else:
+                os.link(encoded_path, output_path)
+            return output_path
+        except FileExistsError:
+            counter += 1
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +629,13 @@ class ProResEncoder:
         profile: ProResProfile,
         framerate: float,
         output_path: Path,
+        input_transfer: str = "sRGB",
     ):
         self.ffmpeg_path = ffmpeg_path
         self.profile = profile
         self.framerate = float(framerate)
         self.output_path = Path(output_path)
+        self.transfer_tag = SDR_TRANSFER_TAGS[input_transfer]
 
     def encode(
         self,
@@ -685,15 +703,6 @@ class ProResEncoder:
                 use_alpha=use_alpha,
                 frame_count=frame_count,
             )
-
-        except Exception:
-            # Never leave a corrupt partial MOV behind after a failed encode.
-            try:
-                if self.output_path.exists():
-                    self.output_path.unlink()
-            except OSError:
-                pass
-            raise
 
         finally:
             for temp_path in (audio_path, metadata_path):
@@ -780,6 +789,10 @@ class ProResEncoder:
             command += ["-map_metadata", "-1"]
 
         command += [
+            "-vf",
+            "scale=in_range=pc:out_range=tv:out_color_matrix=bt709,"
+            f"setparams=range=limited:color_primaries=bt709:color_trc={self.transfer_tag}"
+            ":colorspace=bt709",
             "-c:v",
             "prores_ks",
             "-profile:v",
@@ -954,6 +967,18 @@ class SaveProRes(IO.ComfyNode):
                         "MOV metadata as a JSON array in input order."
                     ),
                 ),
+                IO.Combo.Input(
+                    "input_transfer",
+                    display_name="input transfer",
+                    options=list(SDR_TRANSFER_TAGS),
+                    default="sRGB",
+                    optional=True,
+                    tooltip=(
+                        "Transfer function already used by the input RGB. Select sRGB "
+                        "for typical generated images or Rec.709 for Rec.709-encoded plates. "
+                        "The export preserves this transfer function."
+                    ),
+                ),
             ],
             hidden=[
                 IO.Hidden.prompt,
@@ -979,6 +1004,7 @@ class SaveProRes(IO.ComfyNode):
         user_prompt: str = "",
         seed: int = -1,
         reference_files: IO.Autogrow.Type | None = None,
+        input_transfer: str = "sRGB",
     ) -> IO.NodeOutput:
         profile = get_profile(prores_type)
         ffmpeg_path = resolve_ffmpeg()
@@ -1000,24 +1026,29 @@ class SaveProRes(IO.ComfyNode):
             extra_pnginfo=cls.hidden.extra_pnginfo,
         )
 
-        output_path, file, subfolder = resolve_output_path(
+        output_folder, filename, counter, subfolder = resolve_output_location(
             filename_prefix,
             images,
         )
 
-        encoder = ProResEncoder(
-            ffmpeg_path=ffmpeg_path,
-            profile=profile,
-            framerate=framerate,
-            output_path=output_path,
-        )
-
-        encoder.encode(
-            images=images,
-            mask=mask,
-            audio=audio,
-            metadata=metadata,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix=".kaski_prores_", dir=output_folder
+        ) as temp_dir:
+            encoded_path = Path(temp_dir) / "video.mov"
+            encoder = ProResEncoder(
+                ffmpeg_path=ffmpeg_path,
+                profile=profile,
+                framerate=framerate,
+                output_path=encoded_path,
+                input_transfer=input_transfer,
+            )
+            encoder.encode(
+                images=images,
+                mask=mask,
+                audio=audio,
+                metadata=metadata,
+            )
+            output_path = publish_output(encoded_path, output_folder, filename, counter)
 
         return IO.NodeOutput(
             images,
@@ -1025,7 +1056,7 @@ class SaveProRes(IO.ComfyNode):
             ui={
                 "images": [
                     {
-                        "filename": file,
+                        "filename": output_path.name,
                         "subfolder": subfolder,
                         "type": "output",
                     }
@@ -1033,3 +1064,8 @@ class SaveProRes(IO.ComfyNode):
                 "animated": (True,),
             },
         )
+
+
+VIDEO_SAVER_NODES_LIST = [
+    SaveProRes,
+]

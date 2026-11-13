@@ -531,3 +531,9 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 "",
                 "",
             )
+            
+            
+IMAGEAPI_NODES_LIST = [
+    KASKIImageAPISettings,
+    KASKIImageAPIGenerator,
+]

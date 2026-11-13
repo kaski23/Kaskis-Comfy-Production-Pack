@@ -1070,3 +1070,10 @@ class TemporalSmoother(IO.ComfyNode):
             output_images.contiguous(),
             motion_table,
         )
+        
+        
+VIDEO_TOOL_NODES_LIST = [
+    ExtendVideo,
+    ShortenVideo,
+    TemporalSmoother,
+]

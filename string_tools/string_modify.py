@@ -113,75 +113,14 @@ class JoinStrings(IO.ComfyNode):
         )
 
 
-# ---------------------------------------------------------------------------
-# Number to String
-# ---------------------------------------------------------------------------
 
-class NumberToString(IO.ComfyNode):
-    @classmethod
-    def define_schema(cls):
-        return IO.Schema(
-            node_id="NumberToString_KASKI",
-            display_name="Number to String",
-            category="KASKI/stringtools",
-            inputs=[
-                IO.Int.Input(
-                    "number_int",
-                ),
-                IO.Float.Input(
-                    "number_float",
-                ),
-                IO.Combo.Input(
-                    "mode",
-                    options=["INT", "FLOAT"],
-                ),
-                IO.Int.Input(
-                    "zero_padding",
-                    default=0,
-                    min=0,
-                    max=15,
-                    step=1,
-                ),
-                IO.Int.Input(
-                    "decimal_places",
-                    default=2,
-                    min=0,
-                    max=10,
-                    step=1,
-                ),
-            ],
-            outputs=[
-                IO.String.Output(
-                    display_name="string",
-                ),
-            ],
-        )
-
-    @classmethod
-    def execute(
-        cls,
-        number_int: int,
-        number_float: float,
-        mode: str,
-        zero_padding: int,
-        decimal_places: int,
-    ) -> IO.NodeOutput:
-        if mode == "INT":
-            out = f"{number_int:0{zero_padding}d}"
-        else:
-            out = (
-                f"{number_float:0{zero_padding}.{decimal_places}f}"
-            )
-
-        return IO.NodeOutput(out)
 
 
 # ---------------------------------------------------------------------------
 # V3 registration
 # ---------------------------------------------------------------------------
 
-STRING_TOOLS_NODES_LIST = [
+STRING_MODIFY_NODES_LIST = [
     StringSplitAtSymbol,
     JoinStrings,
-    NumberToString,
 ]

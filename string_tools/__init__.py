@@ -1,0 +1,13 @@
+"""KASKI API adaptions."""
+
+from .string_convert import STRING_CONVERT_NODES_LIST
+from .string_modify import STRING_MODIFY_NODES_LIST
+
+
+
+
+
+
+
+
+STRING_TOOLS_NODES_LIST = STRING_CONVERT_NODES_LIST + STRING_MODIFY_NODES_LIST

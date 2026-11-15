@@ -59,10 +59,26 @@ class GetValueFromDict(IO.ComfyNode):
                     "key",
                     default="",
                     multiline=False,
-                    tooltip="Path, e.g. body_3.matching_hooks or body_3.matching_hooks[0].",
+                    tooltip="Path, e.g. body_1.data or body_1.data_field[0].",
                 ),
             ],
-            outputs=[IO.String.Output(display_name="Values", is_output_list=True)],
+            outputs=[
+                IO.String.Output(
+                    display_name="As String",
+                    is_output_list=True,
+                    tooltip=(
+                        "A ComfyUI list with one string per array item, or one "
+                        "string for a single value. Non-string values are JSON-encoded."
+                    ),
+                ),
+                IO.Dict.Output(
+                    display_name="As Dict",
+                    tooltip=(
+                        "The selected value under the final path segment, preserving "
+                        "its original type. For 'body_1.data_field[0]', the key is 'data_field[0]'."
+                    ),
+                ),
+            ],
         )
 
     @classmethod
@@ -93,7 +109,7 @@ class GetValueFromDict(IO.ComfyNode):
             item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)
             for item in items
         ]
-        return IO.NodeOutput(strings)
+        return IO.NodeOutput(strings, {segment: value})
 
 DICTS_TO_JSON_NODE_LIST = [
     GenerateJSONfromDICT,

@@ -2,7 +2,6 @@ from comfy_api.latest import IO
 from comfy_execution.graph_utils import ExecutionBlocker
 
 
-
 # ---------------------------------------------------------------------------
 # First Valid Input
 # ---------------------------------------------------------------------------
@@ -57,11 +56,12 @@ class FirstValidInput_KASKI(IO.ComfyNode):
 
             value = inputs.get(f"input_{i}")
 
-            if value is not None:
-                return IO.NodeOutput(value)
+            if value is None or (isinstance(value, str) and not value):
+                continue
+
+            return IO.NodeOutput(value)
 
         return IO.NodeOutput(None)
-
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +198,14 @@ class Gate:
 class Gate1_KASKI(Gate, IO.ComfyNode):
     CHANNELS = 1
 
+
 class Gate2_KASKI(Gate, IO.ComfyNode):
     CHANNELS = 2
 
+
 class Gate3_KASKI(Gate, IO.ComfyNode):
     CHANNELS = 3
+
 
 class Gate4_KASKI(Gate, IO.ComfyNode):
     CHANNELS = 4
@@ -212,11 +215,10 @@ class Gate4_KASKI(Gate, IO.ComfyNode):
 # Registration
 # ---------------------------------------------------------------------------
 
-FLOW_CONTROL_NODES_LIST = [
+SELECTION_NODES_LIST = [
     FirstValidInput_KASKI,
     Gate1_KASKI,
     Gate2_KASKI,
     Gate3_KASKI,
     Gate4_KASKI,
-    
 ]

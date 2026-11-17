@@ -1,6 +1,20 @@
 import json
 import re
+
 from comfy_api.latest import io as IO
+
+
+def _strip_new_lines(value):
+    if isinstance(value, str):
+        return re.sub(r"[\r\n]+", " ", value)
+
+    if isinstance(value, dict):
+        return {key: _strip_new_lines(item) for key, item in value.items()}
+
+    if isinstance(value, list):
+        return [_strip_new_lines(item) for item in value]
+
+    return value
 
 
 class GenerateDICTfromKV(IO.ComfyNode):
@@ -11,25 +25,26 @@ class GenerateDICTfromKV(IO.ComfyNode):
             node_id="GenerateDICTfromKV_KASKI",
             display_name="Generate DICT from Key-Value-Pair (JSON-Tools)",
             category="KASKI/jsontools",
-
             inputs=[
                 IO.String.Input(
                     "key",
                     default="",
                     multiline=False,
                 ),
-
                 IO.String.Input(
                     "value",
                     default="",
                     multiline=True,
                 ),
-            ],
-
-            outputs=[
-                IO.Dict.Output(
-                    display_name="KeyValue-Dict",
+                IO.Boolean.Input(
+                    "strip_new_lines",
+                    display_name="Strip new Lines",
+                    optional=True,
+                    default=False,
                 ),
+            ],
+            outputs=[
+                IO.Dict.Output(display_name="KeyValue-Dict"),
             ],
         )
 
@@ -50,25 +65,17 @@ class GenerateDICTfromKV(IO.ComfyNode):
 
         # 2. JSON key-value fragment -> DICT
         try:
-            parsed = json.loads(
-                "{\n" + fragment + "\n}"
-            )
-
+            parsed = json.loads("{\n" + fragment + "\n}")
             if isinstance(parsed, dict):
                 return parsed
-
         except json.JSONDecodeError:
             pass
 
         # 3. JSON value fragment -> LIST
         try:
-            parsed = json.loads(
-                "[\n" + fragment + "\n]"
-            )
-
+            parsed = json.loads("[\n" + fragment + "\n]")
             if isinstance(parsed, list):
                 return parsed
-
         except json.JSONDecodeError:
             pass
 
@@ -77,9 +84,10 @@ class GenerateDICTfromKV(IO.ComfyNode):
 
     @classmethod
     def execute(
-            cls,
-            key: str,
-            value: str,
+        cls,
+        key: str,
+        value: str,
+        strip_new_lines: bool = False,
     ) -> IO.NodeOutput:
         key = key.strip()
         if not key:
@@ -88,10 +96,15 @@ class GenerateDICTfromKV(IO.ComfyNode):
         if value == "" or value is None:
             return IO.NodeOutput({})
 
-        return IO.NodeOutput({key: cls.parse_json_or_string(value)})
+        parsed_value = cls.parse_json_or_string(value)
+        if strip_new_lines:
+            parsed_value = _strip_new_lines(parsed_value)
+
+        return IO.NodeOutput({key: parsed_value})
 
 
 class GenerateDICTfromJSON(IO.ComfyNode):
+
     @classmethod
     def define_schema(cls):
         return IO.Schema(
@@ -105,12 +118,22 @@ class GenerateDICTfromJSON(IO.ComfyNode):
                     multiline=True,
                     tooltip="A JSON object, optionally inside a Markdown code fence.",
                 ),
+                IO.Boolean.Input(
+                    "strip_new_lines",
+                    display_name="Strip new Lines",
+                    optional=True,
+                    default=False,
+                ),
             ],
             outputs=[IO.Dict.Output(display_name="DICT")],
         )
 
     @classmethod
-    def execute(cls, json_text: str) -> IO.NodeOutput:
+    def execute(
+        cls,
+        json_text: str,
+        strip_new_lines: bool = False,
+    ) -> IO.NodeOutput:
         text = json_text.lstrip().removeprefix("\ufeff").strip()
 
         fence = re.fullmatch(
@@ -134,6 +157,9 @@ class GenerateDICTfromJSON(IO.ComfyNode):
 
         if not isinstance(data, dict):
             raise ValueError("Expected a JSON object at the root (an object in {}).")
+
+        if strip_new_lines:
+            data = _strip_new_lines(data)
 
         return IO.NodeOutput(data)
 

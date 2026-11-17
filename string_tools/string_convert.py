@@ -6,66 +6,51 @@ from comfy_api.latest import ComfyExtension, io
 
 
 # ---------------------------------------------------------------------------
-# Number to String
+# Any to String
 # ---------------------------------------------------------------------------
 
-class NumberToString(io.ComfyNode):
+class AnyToString(io.ComfyNode):
     @classmethod
-    def define_schema(cls):
+    def define_schema(cls) -> io.Schema:
         return io.Schema(
-            node_id="NumberToString_KASKI",
-            display_name="Number to String",
+            node_id="AnyToString_KASKI",
+            display_name="Any to String",
             category="KASKI/stringtools",
-            inputs=[
-                io.Int.Input(
-                    "number_int",
-                ),
-                io.Float.Input(
-                    "number_float",
-                ),
-                io.Combo.Input(
-                    "mode",
-                    options=["INT", "FLOAT"],
-                ),
-                io.Int.Input(
-                    "zero_padding",
-                    default=0,
-                    min=0,
-                    max=15,
-                    step=1,
-                ),
-                io.Int.Input(
-                    "decimal_places",
-                    default=2,
-                    min=0,
-                    max=10,
-                    step=1,
-                ),
-            ],
-            outputs=[
-                io.String.Output(
-                    display_name="string",
-                ),
-            ],
+            description="Convert any value to text. Lists, tuples, and dictionaries use JSON when possible.",
+            inputs=[io.AnyType.Input("value")],
+            outputs=[io.String.Output(display_name="string")],
         )
 
     @classmethod
-    def execute(
-        cls,
-        number_int: int,
-        number_float: float,
-        mode: str,
-        zero_padding: int,
-        decimal_places: int,
-    ) -> io.NodeOutput:
-        if mode == "INT":
-            out = f"{number_int:0{zero_padding}d}"
-        else:
-            out = (
-                f"{number_float:0{zero_padding}.{decimal_places}f}"
-            )
+    def execute(cls, value: object) -> io.NodeOutput:
+        if isinstance(value, (dict, list, tuple)):
+            try:
+                text = json.dumps(value, ensure_ascii=False, allow_nan=False, default=cls._as_text)
+            except Exception:
+                pass
+            else:
+                return io.NodeOutput(text)
 
-        return io.NodeOutput(out)
+        return io.NodeOutput(cls._as_text(value))
+    
+    @staticmethod
+    def _as_text(value: object) -> str:
+        if isinstance(value, str):
+            return value
+
+        if isinstance(value, (bytes, bytearray)):
+            try:
+                return value.decode("utf-8")
+            except Exception:
+                pass
+
+        for formatter in (str, repr):
+            try:
+                return formatter(value)
+            except Exception:
+                continue
+
+        return f"<{type(value).__name__}>"
 
 
 
@@ -123,6 +108,6 @@ class FString(io.ComfyNode, Formatter):
 # ---------------------------------------------------------------------------
 
 STRING_CONVERT_NODES_LIST = [
-    NumberToString,
+    AnyToString,
     FString,
 ]

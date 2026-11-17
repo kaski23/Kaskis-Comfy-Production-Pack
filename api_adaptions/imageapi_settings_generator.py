@@ -91,7 +91,7 @@ def _log_soft_error(where: str, error: Exception) -> None:
 
 
 def _image_group(
-    images: Input.Image | list[Input.Image] | None,
+    images: Input.Image | list[Input.Image | None] | None,
 ) -> dict[str, Input.Image]:
     if images is None:
         return {}
@@ -100,6 +100,8 @@ def _image_group(
     group: dict[str, Input.Image] = {}
 
     for batch in batches:
+        if batch is None:
+            continue
         if batch.ndim == 3:
             batch = batch.unsqueeze(0)
 
@@ -159,7 +161,6 @@ def _normalized_output(
     prompt: str,
     model_name: str,
     seed: int | str,
-    n_requested_generations: int,
 ) -> IO.NodeOutput:
     """The one and only six-output boundary for every provider."""
     if not isinstance(image, torch.Tensor) or image.ndim != 4:
@@ -405,7 +406,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
         prompt: list[str],
         settings: list[dict[str, Any]],
         seed: list[int],
-        images: list[Input.Image] | None = None,
+        images: list[Input.Image | None] | None = None,
         mask: list[Input.Mask] | None = None,
         files: list[Any] | None = None,
     ) -> IO.NodeOutput:
@@ -440,7 +441,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(
-                    image, "", None, prompt, model_name, effective_seed, settings["n"]
+                    image, "", None, prompt, model_name, effective_seed
                 )
 
             if provider == PROVIDER_GEMINI:
@@ -458,7 +459,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                     )
                     image, text = _core_values(out, 2, provider)
                     return _normalized_output(
-                        image, text, None, prompt, model_name, effective_seed, 1
+                        image, text, None, prompt, model_name, effective_seed
                     )
 
                 model = dict(settings["model"])
@@ -480,7 +481,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 )
                 image, text, thought_image = _core_values(out, 3, provider)
                 return _normalized_output(
-                    image, text, thought_image, prompt, model_name, effective_seed, 1
+                    image, text, thought_image, prompt, model_name, effective_seed
                 )
 
             if provider == PROVIDER_SEEDREAM:
@@ -496,7 +497,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(
-                    image, "", None, prompt, model_name, effective_seed, 1
+                    image, "", None, prompt, model_name, effective_seed
                 )
 
             if provider == PROVIDER_FLUX2:
@@ -512,7 +513,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 )
                 (image,) = _core_values(out, 1, provider)
                 return _normalized_output(
-                    image, "", None, prompt, model_name, effective_seed, 1
+                    image, "", None, prompt, model_name, effective_seed
                 )
 
             raise ValueError(f"Unknown provider: {provider!r}")
@@ -529,7 +530,7 @@ class KASKIImageAPIGenerator(IO.ComfyNode):
                 black,
                 "",
                 "",
-                "",
+                -1,
             )
             
             

@@ -25,6 +25,10 @@ fmt = next(
 )
 print("KASKI added mov to seedance 2.5 nodes:", vars(fmt))
 
+# Web-Directory
+WEB_DIRECTORY = "./web"
+
+
 # V3-Inits
 class KaskisComfyNodes(ComfyExtension):
     async def get_node_list(self):

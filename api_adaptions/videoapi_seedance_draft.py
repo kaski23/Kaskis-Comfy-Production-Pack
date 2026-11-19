@@ -55,12 +55,28 @@ def _draft_price_badge(native_badge):
     )
 
 
+def _fixed_reference_inputs(inputs):
+    for input_spec in inputs:
+        if not isinstance(input_spec, IO.Autogrow.Input):
+            yield input_spec
+            continue
+
+        for index, template_input in enumerate(input_spec.template.get_all()):
+            reference = copy(template_input)
+            # Preserve the socket path used by saved workflows and the native model dict.
+            reference.id = f"{input_spec.id}.{template_input.id}"
+            reference.optional = template_input.optional or index >= input_spec.template.min
+            yield reference
+
+
 class KASKISeedance25Draft(IO.ComfyNode):
     @classmethod
     def define_schema(cls):
         native = ByteDance2ReferenceNodeV2.define_schema()
         selector = copy(next(item for item in native.inputs if item.id == "model"))
-        selector.options = [next(option for option in selector.options if option.key == DRAFT_MODEL)]
+        draft_option = copy(next(option for option in selector.options if option.key == DRAFT_MODEL))
+        draft_option.inputs = list(_fixed_reference_inputs(draft_option.inputs))
+        selector.options = [draft_option]
         selector.tooltip = "Seedance 2.5 Draft renders a 480p preview for Draft to Final."
 
         outputs = [
@@ -155,10 +171,11 @@ class KASKISeedance25Draft(IO.ComfyNode):
             if start_delay:
                 await sleep_with_interrupt(start_delay, cls)
 
-            # The native node replaces prepared refs in these mappings in place.
-            for key in ("reference_images", "reference_videos"):
-                if key in draft:
-                    draft[key] = dict(draft[key])
+            # Each run needs its own mapping of connected references.
+            for key in ("reference_images", "reference_videos", "reference_audios", "reference_assets"):
+                draft[key] = {
+                    name: value for name, value in (draft.get(key) or {}).items() if value is not None
+                }
 
             # Comfy's API client keys estimates and credit tracking by class.
             # Give each run its own key and retain this node's auth and ID.

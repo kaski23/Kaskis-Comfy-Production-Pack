@@ -14,7 +14,6 @@ def apply_comfy_patches():
     """
 
     _patch_api_retry_status()
-    _patch_seedance25_mov()
 
 
 def _patch_api_retry_status():
@@ -43,82 +42,4 @@ def _patch_api_retry_status():
     except Exception:
         log.exception(
             "[KASKI] Failed to patch Comfy API retry statuses."
-        )
-
-
-def _patch_seedance25_mov():
-    """
-    Add MOV as an output option for Seedance 2.5.
-
-    The original ComfyUI helper still creates the full Seedance input schema.
-    KASKI only replaces its output_format input afterwards.
-
-    This keeps future upstream changes to the rest of the schema intact.
-    """
-
-    try:
-        if not hasattr(bytedance, "_seedance25_text_inputs"):
-            log.warning(
-                "[KASKI] Seedance MOV patch skipped: "
-                "_seedance25_text_inputs was not found."
-            )
-            return
-
-        current = bytedance._seedance25_text_inputs
-
-        # Avoid wrapping the helper multiple times during reloads.
-        if getattr(
-            current,
-            "_kaski_mov_patch",
-            False,
-        ):
-            return
-
-        original = current
-
-        def patched(*args, **kwargs):
-            inputs = original(
-                *args,
-                **kwargs,
-            )
-
-            found = False
-
-            for index, input_def in enumerate(inputs):
-                if input_def.id != "output_format":
-                    continue
-
-                inputs[index] = IO.Combo.Input(
-                    "output_format",
-                    options=[
-                        "mp4",
-                        "mov",
-                    ],
-                    default="mov",
-                    tooltip="Container format of the output video.",
-                )
-
-                found = True
-                break
-
-            if not found:
-                log.warning(
-                    "[KASKI] Seedance MOV patch could not find "
-                    "the output_format input."
-                )
-
-            return inputs
-
-        patched._kaski_mov_patch = True
-        patched._kaski_original = original
-
-        bytedance._seedance25_text_inputs = patched
-
-        log.info(
-            "[KASKI] Patched Seedance 2.5 output formats: mp4, mov."
-        )
-
-    except Exception:
-        log.exception(
-            "[KASKI] Failed to patch Seedance 2.5 MOV support."
         )

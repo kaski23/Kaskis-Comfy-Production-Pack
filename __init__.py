@@ -14,16 +14,12 @@ from .video import VIDEO_NODES_LIST
 from .input_conform import INPUT_CONFORM_NODES_LIST
 from .flow_control import FLOW_CONTROL_NODES_LIST
 from .json_tools import JSON_TOOLS_NODE_LIST
+from .audio import AUDIO_NODES_LIST
 
 #apply patches
 apply_comfy_patches()
 
 print("KASKI patched retry 402 into RETRY:", client._RETRY_STATUS)
-fmt = next(
-    x for x in bd._seedance25_text_inputs()
-    if x.id == "output_format"
-)
-print("KASKI added mov to seedance 2.5 nodes:", vars(fmt))
 
 # Web-Directory
 WEB_DIRECTORY = "./web"
@@ -42,7 +38,8 @@ class KaskisComfyNodes(ComfyExtension):
             *API_ADAPTIONS_NODES_LIST,
             *VIDEO_NODES_LIST,
             *FLOW_CONTROL_NODES_LIST,
-            *JSON_TOOLS_NODE_LIST
+            *JSON_TOOLS_NODE_LIST,
+            *AUDIO_NODES_LIST
         ]
 
 async def comfy_entrypoint():

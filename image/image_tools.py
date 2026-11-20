@@ -224,7 +224,7 @@ Math expressions only: no Python statements, object attributes or indexing.
     def define_schema(cls):
         return io.Schema(
             node_id="ChannelMath_KASKI",
-            display_name="Channel Math (KASKI)",
+            display_name="Image Channel Math",
             category="KASKI/image",
             description=(
                 "Per-pixel math with freely combined RGB channels. "

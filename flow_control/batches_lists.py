@@ -23,7 +23,22 @@ class EnumerateList_KASKI(io.ComfyNode):
         return io.NodeOutput(list(range(len(items))))
         
 
+class GetListLength_KASKI(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="GetListLength_KASKI",
+            display_name="Get List Length",
+            category="KASKI/flow_control",
+            description="Returns the length of any list",
+            is_input_list=True,
+            inputs=[io.AnyType.Input("list_input")],
+            outputs=[io.Int.Output(display_name="length")],
+        )
 
+    @classmethod
+    def execute(cls, list_input: list[object]) -> io.NodeOutput:
+        return io.NodeOutput(len(list_input))
 
 
 class EditList_KASKI(io.ComfyNode):
@@ -232,6 +247,7 @@ class AppendToList_KASKI(io.ComfyNode):
 
 BATCHES_LISTS_NODES_LIST = [
     EnumerateList_KASKI,
+    GetListLength_KASKI,
     EditList_KASKI,
     AppendToList_KASKI,
 ]

@@ -84,7 +84,15 @@ class EditList_KASKI(io.ComfyNode):
                 io.Boolean.Input(
                     "shuffle",
                     default=False,
-                    tooltip="Randomly reorder items after resizing.",
+                    tooltip="Reorder items after resizing using the seed.",
+                ),
+                io.Int.Input(
+                    "seed",
+                    default=0,
+                    min=0,
+                    max=0xFFFFFFFFFFFFFFFF,
+                    step=1,
+                    tooltip="Same input list and seed produce the same shuffled order.",
                 ),
             ],
             outputs=[
@@ -100,6 +108,7 @@ class EditList_KASKI(io.ComfyNode):
         shorten_behavior,
         lengthen_behavior,
         shuffle,
+        seed,
     ) -> io.NodeOutput:
         # is_input_list=True passes all inputs as lists, including widget values.
         target = edit_length[0]
@@ -144,18 +153,9 @@ class EditList_KASKI(io.ComfyNode):
             # No_lengthening: leave unchanged.
 
         if do_shuffle:
-            random.shuffle(result)
+            random.Random(seed[0]).shuffle(result)
 
         return io.NodeOutput(result)
-
-    @classmethod
-    def fingerprint_inputs(cls, shuffle=None, **kwargs):
-        # Connected inputs may be unknown when fingerprints are evaluated.
-        # Re-run conservatively in that case to preserve shuffle behavior.
-        if isinstance(shuffle, (list, tuple)):
-            shuffle = shuffle[0] if shuffle else None
-
-        return float("nan") if shuffle is None or shuffle else None
 
 
 

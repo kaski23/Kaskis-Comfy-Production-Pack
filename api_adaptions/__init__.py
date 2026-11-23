@@ -6,7 +6,7 @@ from .videoapi_reference_to_video import KASKIReferenceToVideoAPI
 from .videoapi_enhance import KASKIVideoEnhanceAPI
 from .imageapi_settings_generator import IMAGEAPI_NODES_LIST
 from .videoapi_seedance_draft import SEEDANCE_DRAFT_API_NODES_LIST
-from .elevenlabsapi_dialogue import KASKIElevenLabsJSONToDialogue
+from .elevenlabsapi_dialogue import ELEVENLABSAPI_NODES_LIST
 
 
 SINGLE_CLASSES_NODE_LIST = [
@@ -14,8 +14,7 @@ SINGLE_CLASSES_NODE_LIST = [
     KASKIFirstLastFrameToVideoAPI,
     KASKIReferenceToVideoAPI,
     KASKIVideoEnhanceAPI,
-    KASKIElevenLabsJSONToDialogue,
 ]
 
 
-API_ADAPTIONS_NODES_LIST = IMAGEAPI_NODES_LIST + SINGLE_CLASSES_NODE_LIST + SEEDANCE_DRAFT_API_NODES_LIST
+API_ADAPTIONS_NODES_LIST = IMAGEAPI_NODES_LIST + SINGLE_CLASSES_NODE_LIST + SEEDANCE_DRAFT_API_NODES_LIST + ELEVENLABSAPI_NODES_LIST

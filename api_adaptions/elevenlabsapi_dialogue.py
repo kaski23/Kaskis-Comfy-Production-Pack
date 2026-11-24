@@ -2,50 +2,71 @@
 
 import json
 
-from comfy_api.latest import IO
+from comfy_api.latest import io
 from comfy_api_nodes.nodes_elevenlabs import (
-    ELEVENLABS_VOICES,
     ElevenLabsTextToDialogue,
     ElevenLabsVoiceSelector,
 )
 
-# Find Voices here: https://json2video.com/ai-voices/elevenlabs/
-# Entries follow ComfyUI's ELEVENLABS_VOICES format:
+
+# Local voice catalogue. Edit this list independently of ComfyUI.
 # (voice_id, display_name, gender, accent)
-ADDITIONAL_ELEVEN_LABS_VOICES: list[tuple[str, str, str, str]] = [
-    # ("YOUR_VOICE_ID", "My Voice", "female", "german"),
+ELEVENLABS_VOICES: list[tuple[str, str, str, str]] = [
+    ("CwhRBWXzGAHq8TQ4Fs17", "Roger", "male", "american"),
+    ("EXAVITQu4vr4xnSDxMaL", "Sarah", "female", "american"),
+    ("FGY2WhTYpPnrIDTdsKH5", "Laura", "female", "american"),
+    ("IKne3meq5aSn9XLyUdCD", "Charlie", "male", "australian"),
+    ("JBFqnCBsd6RMkjVDRZzb", "George", "male", "british"),
+    ("N2lVS1w4EtoT3dr4eOWO", "Callum", "male", "american"),
+    ("SAz9YHcvj6GT2YYXdXww", "River", "neutral", "american"),
+    ("SOYHLrjzK2X1ezoPC6cr", "Harry", "male", "american"),
+    ("TX3LPaxmHKxFdv7VOQHJ", "Liam", "male", "american"),
+    ("Xb7hH8MSUJpSbSDYk0k2", "Alice", "female", "british"),
+    ("XrExE9yKIg1WjnnlVkGX", "Matilda", "female", "american"),
+    ("bIHbv24MWmeRgasZH58o", "Will", "male", "american"),
+    ("cgSgspJ2msm6clMCkdW9", "Jessica", "female", "american"),
+    ("cjVigY5qzO86Huf0OWal", "Eric", "male", "american"),
+    ("hpp4J3VqNfWAUOO0d1Us", "Bella", "female", "american"),
+    ("iP95p4xoKVk53GoZ742B", "Chris", "male", "american"),
+    ("nPczCjzI2devNBz1zQrb", "Brian", "male", "american"),
+    ("onwK4e9ZLuTAKqWW03F9", "Daniel", "male", "british"),
+    ("pFZP5JQG7iQjIQuC4Bku", "Lily", "female", "british"),
+    ("pNInz6obpgDQGcFmaJgB", "Adam", "male", "american"),
+    ("pqHfZKP75CvOlQylNhV4", "Bill", "male", "american"),
 ]
 
 
 class KASKIElevenLabsVoiceSelector(ElevenLabsVoiceSelector):
     @classmethod
-    def define_schema(cls) -> IO.Schema:
+    def _voice_map(cls) -> dict[str, str]:
+        return {
+            f"{name} ({gender}, {accent})": voice_id
+            for voice_id, name, gender, accent in ELEVENLABS_VOICES
+        }
+
+    @classmethod
+    def define_schema(cls) -> io.Schema:
         schema = super().define_schema()
         schema.node_id = "ElevenLabsVoiceSelector_KASKI"
         schema.display_name = "ElevenLabs Voice Selector (KASKI)"
         schema.description = (
-            "Select a predefined or additional ElevenLabs voice, "
-            "or override the selection with a manually entered voice ID."
-            " Find voice IDs here: https://json2video.com/ai-voices/elevenlabs/"
+            "Select a voice from this file's local catalogue, "
+            "or override the selection with alternative_voice_id."
         )
         schema.category = "KASKI/api-adaptions/audio"
 
         voice_options = next(widget for widget in schema.inputs if widget.id == "voice")
-        voices = [*ELEVENLABS_VOICES, *ADDITIONAL_ELEVEN_LABS_VOICES]
-        voice_options.options = list(
-            dict.fromkeys(
-                f"{name} ({gender}, {accent})"
-                for _, name, gender, accent in voices
-            )
-        )
+        voice_options.options = list(cls._voice_map())
+        voice_options.default = voice_options.options[0] if voice_options.options else None
+        voice_options.tooltip = "Choose a voice from this file's local voice lists."
         schema.inputs.append(
-            IO.String.Input(
-                "voice_id",
+            io.String.Input(
+                "alternative_voice_id",
                 default="",
                 dynamic_prompts=False,
                 optional=True,
                 tooltip=(
-                    "Optional manual ElevenLabs voice ID. "
+                    "Alternative manual ElevenLabs voice ID. "
                     "A non-empty ID overrides the voice dropdown. "
                     "Leave empty to use the selected voice."
                 ),
@@ -54,24 +75,20 @@ class KASKIElevenLabsVoiceSelector(ElevenLabsVoiceSelector):
         return schema
 
     @classmethod
-    def execute(cls, voice: str, voice_id: str = "") -> IO.NodeOutput:
-        manual_voice_id = voice_id.strip()
+    def execute(cls, voice: str, alternative_voice_id: str = "") -> io.NodeOutput:
+        manual_voice_id = alternative_voice_id.strip()
         if manual_voice_id:
-            return IO.NodeOutput(manual_voice_id)
+            return io.NodeOutput(manual_voice_id)
 
-        additional_voice_map = {
-            f"{name} ({gender}, {accent})": additional_voice_id
-            for additional_voice_id, name, gender, accent in ADDITIONAL_ELEVEN_LABS_VOICES
-        }
-        if voice in additional_voice_map:
-            return IO.NodeOutput(additional_voice_map[voice])
-
-        return super().execute(voice=voice)
+        selected_voice_id = cls._voice_map().get(voice)
+        if not selected_voice_id:
+            raise ValueError(f"Unknown voice: {voice}")
+        return io.NodeOutput(selected_voice_id)
 
 
 class KASKIElevenLabsJSONToDialogue(ElevenLabsTextToDialogue):
     @classmethod
-    def define_schema(cls) -> IO.Schema:
+    def define_schema(cls) -> io.Schema:
         schema = super().define_schema()
         schema.node_id = "ElevenLabsJSONToDialogue_KASKI"
         schema.display_name = "ElevenLabs JSON to Dialogue (KASKI)"
@@ -92,7 +109,7 @@ class KASKIElevenLabsJSONToDialogue(ElevenLabsTextToDialogue):
             # Mount the JSON widget together with the voice sockets.
             option.inputs.insert(
                 0,
-                IO.String.Input(
+                io.String.Input(
                     "dialogue_json",
                     multiline=True,
                     dynamic_prompts=False,
@@ -107,7 +124,7 @@ class KASKIElevenLabsJSONToDialogue(ElevenLabsTextToDialogue):
         return schema
 
     @classmethod
-    async def execute(cls, inputs: dict, **settings) -> IO.NodeOutput:
+    async def execute(cls, inputs: dict, **settings) -> io.NodeOutput:
         turns = json.loads(inputs["dialogue_json"])
         if not isinstance(turns, list) or not turns:
             raise ValueError("dialogue_json must contain a non-empty JSON array.")
@@ -129,7 +146,6 @@ class KASKIElevenLabsJSONToDialogue(ElevenLabsTextToDialogue):
             core_inputs[f"voice{number}"] = voice_id
 
         return await super().execute(inputs=core_inputs, **settings)
-
 
 ELEVENLABSAPI_NODES_LIST = [
     KASKIElevenLabsVoiceSelector,

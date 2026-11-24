@@ -1,733 +1,314 @@
-# KASKI Nodes
+# Kaski’s Comfy Production Pack
 
-Production-oriented custom nodes for [ComfyUI](https://github.com/Comfy-Org/ComfyUI), focused on practical AI/VFX workflows: API image generation, production naming, filename-aware loading, metadata-safe saving, video conformation, JSON assembly and small workflow utilities.
+## What the pack is for
 
-All nodes are available below the `KASKI` category.
+With 40 shots and five takes each, I want to switch models, run variations in parallel and still find the right prompt three weeks later. It puts ComfyUI’s APIs in one workflow, keeps references and take names together, and gets shots to the frame count the edit needs. `final_final_for_real.mov` can retire.
 
-## Installation
+Drop the pack into `ComfyUI/custom_nodes/`, restart ComfyUI and look under `KASKI`. The pack adds HTTP 402 to ComfyUI’s retryable API status codes. To inspect PNGs and MOVs locally or export a folder as a PDF, open the [metadata toolkit](tools_docs/KASKI_PNG_MOV_Metadata_Toolkit.html). You'll find the button for that in the top bar.
 
-Clone the repository into your ComfyUI `custom_nodes` directory:
+Also, try shaking a connected node at some point... ;)
 
-```bash
-cd ComfyUI/custom_nodes
-git clone https://github.com/kaski23/Kaskis_Comfy_Nodes_v2.git
+## The packages
+
+### API Adaptions
+
+Compare providers in the same graph and send generation settings straight to your saver. Controls and seed repeatability depend on the model. The video adapters’ `error` output holds a failure message or `NO ERRORS TODAY - SUCCEEDED`.
+
+#### KASKI Unified Image API Settings
+
+Configure OpenAI GPT Image, Gemini, Seedream or FLUX.2 once and share `settings` across generators. On Gemini, `system_prompt` sets common instructions and `response_modalities` selects the output types.
+
+#### KASKI Unified Image API
+
+Connect prompt, seed and `settings`. All frames on `images` become references for one request. Prompt, seed and settings lists each use their first entry. `mask` goes to OpenAI, `files` to Gemini. Prompt, model and seed outputs feed the saver. A black placeholder carries the error in `thoughts`.
+
+#### KASKI Text to Video API
+
+For a motion test, enter a prompt and seed. Switch between Seedance, Kling and Gemini Omni in the model dropdown to try the same shot.
+
+#### KASKI First / Last Frame to Video API
+
+Prompt the motion and connect a start frame. Add `last_frame` for a target pose. Kling 4.0 accepts either endpoint or both. Kling 3.0 Omni takes an end frame or up to six additional reference images.
+
+#### KASKI Reference to Video API
+
+Guide the look or motion with one still per image socket. In Kling Edit, the first video is the clip to edit. Pick the model to match your references.
+
+| Model or mode | Max. images | Videos | Max. audio clips |
+| --- | ---: | --- | ---: |
+| Seedance 2.5 | 30 | Up to 10 | 10 |
+| Seedance 2.0 | 9 | Up to 3 | 3 |
+| Gemini Omni | 14 | Up to 3 | 0 |
+| Kling 3.0 Omni · Image References | 7 | 0 | 0 |
+| Kling 3.0 Omni · Video Reference / Edit Video | 4 | Exactly 1 | 0 |
+| Kling 4.0 | 10 | Up to 5, including the base clip in Edit mode | 0 |
+
+#### KASKI Video Enhance API
+
+Connect a finished `VIDEO` and pick HitPaw or Topaz for restoration or upscaling. Choose `Topaz · Interpolation Only` for extra frames. The `prompt` input applies to Topaz Astra 2.
+
+#### KASKI Seedance 2.5 Draft
+
+Audition up to 32 parallel takes at 480p. With `n_runs = 3`, seed `40` and `run_delay_ms = 100`, seeds 40, 41 and 42 are scheduled 100 ms apart. A delay of `0` launches them together. Video, task ID and error lists line up by index.
+
+#### KASKI Seedance 2.5 Draft to Final Video
+
+Pick the take you want, connect its `draft_task_id` and choose the final resolution (default `1080p`). The ID tells Seedance which draft to finish.
+
+#### ElevenLabs Voice Selector (KASKI)
+
+Reuse a character’s voice across takes. Select from the local catalogue or override the dropdown with a non-empty `alternative_voice_id`.
+
+#### ElevenLabs JSON to Dialogue (KASKI)
+
+Set `inputs` to the number of voice sockets you need. Connect a selector or clone to each. In `dialogue_json`, name the socket in `voice_id` and list turns in playback order. Reuse a socket whenever its speaker returns.
+
+```json
+[
+  {"text": "Lights up.", "voice_id": "voice1"},
+  {"text": "Rolling.", "voice_id": "voice2"}
+]
 ```
 
-Then restart ComfyUI.
+### ID Tools
 
-A recent ComfyUI build is recommended. API nodes use ComfyUI's current V3 API and built-in provider infrastructure.
+Keep names consistent from ingest to delivery. Blank or `NONE` omits project or artist. Version `-1` generates `vN`. Extract finds the first ID, strips suffixes and fills missing versions with `vN`. Disable `fail_if_not_found` to pass unmatched text through. Modify takes the bare ID. [Naming conventions](tools_docs/NamingConventions.pdf)
 
-### FFmpeg
+#### Generate Reference ID
 
-`Save ProRes` requires FFmpeg with ProRes support. `imageio-ffmpeg` can be used as a packaged FFmpeg source:
+Pick a type (`location`, `prop`, `character` or `material`), name and version. Add project and artist for `spot_prop_Suitcase_KK_v1`. Use hyphens within names. The four types are reserved as project prefixes.
 
-```bash
-pip install imageio-ffmpeg
-```
+#### Modify Reference ID
 
-A compatible system FFmpeg installation can also be used.
+For a handoff, enter the new artist code, `KEEP` to retain it or `NONE` to remove it. `Increment` advances numeric versions. `vN` stays open.
 
----
+#### Extract Reference ID
 
-# Nodes
+Recover the asset ID from an incoming file. `spot_prop_Suitcase_KK_v2_ref_00001_.png` yields `spot_prop_Suitcase_KK_v2`.
 
-## Image API
+#### Generate Shot ID
 
-Category: `KASKI/api-adaptions/image`
+Set shot number, stage and version for the saver. With `shot_no_zero_padding = 3`, shot 7 becomes `sh007_firstFrame_v1`. Padding is a minimum width.
 
-### KASKI Image API Settings
+#### Modify Shot ID
 
-**Problem:** Provider-specific image nodes expose different settings, making it cumbersome to switch models or keep several generator branches configured consistently.
+Move a shot from `plate` to `enhanced`. `KEEP` retains text fields and `shot_no = -1` preserves the original number and padding. Choose `Increment` for a version bump.
 
-Creates one reusable settings object for the KASKI image generator. The visible controls change automatically with the selected backend and model.
+#### Extract Shot ID
 
-Supported backends currently include:
+Recover the shot name on load. `sh007_plate_v2_00001_.png` gives `sh007_plate_v2` for the next pass.
 
-- OpenAI GPT Image
-  - `gpt-image-2.5-flare`
-  - `gpt-image-2.5-sunburst`
-  - `gpt-image-2`
-- Google Gemini / Nano Banana
-  - Gemini 3 Pro Image
-  - Nano Banana 2
-  - Nano Banana 2 Lite
-- ByteDance Seedream
-  - Seedream 5.0 Pro
-  - Seedream 5.0 Lite
-- Black Forest Labs FLUX.2
-  - Flux.2 Pro
-  - Flux.2 Max
+#### Generate Sequence ID
 
-Features:
+Enter `100` for the whole sequence or `100-01` for its first shot. With three-digit padding those become `seq100_rendered_v1` and `seq100-001_rendered_v1`. The shot uses the width of the formatted sequence number.
 
-- Dynamic model-specific controls
-- One settings output can feed multiple generator nodes
-- Shared Gemini system prompt
-- OpenAI multi-image output count
-- Gemini response modality controls
-- Seedream watermark and thinking controls
-- Provider execution remains inside ComfyUI's built-in API nodes
+#### Modify Sequence ID
 
-### KASKI Image API Generator
+Change the stage or version while keeping the sequence and shot. With `sequence_no` set to `KEEP`, changing the stage takes `seq100-01_plate_v1` to `seq100-001_rendered_v1`. Enter a plain sequence number to drop the shot part.
 
-**Problem:** Different image providers return different outputs and require different execution paths, which makes provider-independent workflows difficult to build.
+#### Extract Sequence ID
 
-Routes a request through the backend selected in `KASKI Image API Settings` and normalizes the result.
+Read the sequence ID from a delivery. `seq100-01_plate_v3_review.mov` gives `seq100-01_plate_v3`. Modify Sequence ID can then normalize the padding.
 
-Inputs:
+### Loaders
 
-- `prompt`
-- `settings`
-- `seed`
-- optional `images`
-- optional `mask`
-- optional Gemini-compatible `files`
+Load the source filename alongside the media so downstream nodes can name outputs and record their references.
 
-Outputs:
+#### Load Image with Filename
 
-1. `image`
-2. `thoughts`
-3. `thought_image`
-4. `prompt`
-5. `modelName`
-6. `seed`
+Select or upload a still. Send image and mask into processing and `filename` to a saver or ID node. It includes the extension.
 
-Features:
+### Input Conform
 
-- Text-to-image and reference-image generation
-- IMAGE batches can be used as reference collections where supported
-- Optional masking where supported by the selected provider
-- Gemini file input support
-- Normalized outputs across all supported providers
-- Prompt, model and seed outputs can be connected directly to KASKI saver nodes
+Calculate the dimensions and frame counts a model or delivery spec requires. Downstream resize, padding and video nodes apply those targets.
 
-The `seed` primarily participates in ComfyUI execution/cache behavior. Whether a provider receives or uses a seed depends on its underlying ComfyUI implementation.
+#### Min/Max Size
 
-If an API call fails, the node prints the traceback to the ComfyUI console, returns a black placeholder image and exposes the error through `thoughts`.
+Enter size limits for each axis. `0` disables a limit. The node keeps the aspect ratio where possible. A 2000 × 500 plate capped at 1920 wide scales to 1920 × 480. With a minimum height of 720, the recommended canvas is **1920 × 720**. Add the missing 240 pixels as vertical padding downstream.
 
----
+#### Align Frames to Seconds
 
-## JSON Tools
+Use this when the edit gives you frames and the API asks for whole seconds. Take the larger of `n_frames` and `minimum_length_frames`, divide by `fps` and round up. Multiply those whole seconds by `fps` and round up again for the target frame count. Send `length_in_seconds` to the API and `frames_to_lengthen_to` to Extend Video.
 
-Category: `KASKI/jsontools`
+| Source frames | Minimum frames | FPS | Whole seconds | Target frames |
+| ---: | ---: | ---: | ---: | ---: |
+| 60 | 72 | 24 | 3 | 72 |
+| 73 | 72 | 24 | 4 | 96 |
+| 96 | 72 | 23.976 | 5 | 120 |
 
-### Generate DICT from Key-Value-Pair
+At 23.976 fps, 96 frames run just past four seconds. That’s why the last row jumps to five.
 
-**Problem:** Building structured prompts as JSON strings becomes fragile once values themselves contain nested objects, quotes or multiple sub-sections.
+#### WAN Video Optimals
 
-Builds a real Python/ComfyUI `DICT` from one key and either a string value or one or more nested DICTs.
+Connect a frame batch. WAN/VACE preset selection weighs dimensions and aspect ratio and penalizes downscaling. Frame count rounds up to the next valid `4n + 1`. A 1280 × 720 clip with 96 frames returns **1280 × 720, 97 frames**.
 
-Modes:
+### Image
 
-#### `STRING`
+Prepare references and masks for generation, fix pixel values and save stills with their source material.
 
-Inputs:
+#### Create Image List
 
-- `key`
-- multiline `value`
+Wire references in order. A two-frame batch plus a portrait still yields three separate items, each at its original resolution.
 
-Example:
+#### Image Channel Math
 
-```text
-key   = prompt
-value = A woman walking through a forest
-```
+Each RGB field is a per-pixel expression over equal-sized images. `r1` is red from image 1. `c1` follows the current output channel. Put `mix(c1, c2, 0.25)` in all three fields for a 75/25 mix, or `clamp(c1, 0, 1)` to clip overshoot. A still can feed every frame of a batch. Output values are unclipped by default.
 
-Output:
+#### Inpaint/Outpaint Images with Color
 
-```python
-{
-    "prompt": "A woman walking through a forest"
-}
-```
+Each `extend_*` input is a percentage of the original dimension. For more headroom, `extend_top = 20` adds 216 pixels above a 1080-pixel-high plate. The color fills the border and masked area. The output mask marks both.
 
-#### `DICT`
+#### Save PNG with metadata
 
-The string field is replaced by an autogrowing list of DICT inputs.
+Save display-ready frames at 8 or 16 bits with workflow, prompt, model and seed. Pixel values are clipped to 0–1 without a color transform. All `input_images` are embedded as 8-bit references in every PNG. `filename_prefix` accepts subfolders and ComfyUI formatting tokens.
 
-Connected DICTs are merged in input order and placed below `key`.
+### Video
 
-Example:
+Load footage, fix its timing and export a ProRes MOV for editorial. Frame tools take `IMAGE` batches. RIFE is bundled for motion analysis and interpolation.
 
-```python
-dict1 = {"character": "Anna"}
-dict2 = {"camera": "35mm"}
-dict3 = {"lighting": "soft"}
-```
+#### Load Video with Filename
 
-with:
+Load a clip. Use `video` for an API or `images` for frame processing. Filename and alpha are separate outputs. Footage without alpha gets an opaque mask.
 
-```text
-key = shot
-```
+#### Load Video with KASKI Metadata
 
-produces:
+Reconstruct a take from its MOV tags. Read prompt, model, seed and reference filenames. `workflow_json` holds the editor layout and graph. `workflow_prompt_json` holds the API execution graph. A missing seed reads as `-1`.
 
-```python
-{
-    "shot": {
-        "character": "Anna",
-        "camera": "35mm",
-        "lighting": "soft"
-    }
-}
-```
+#### Extend Video
 
-Features:
+Set `n_frames` to the minimum length. Here’s what happens when you extend `A B C` to five frames. With `interpolated`, `scale` sets RIFE’s internal processing resolution.
 
-- Dynamic `STRING` / `DICT` interface
-- Up to 64 nested DICT inputs
-- Automatic merging of connected DICTs
-- Later DICTs overwrite earlier values when the same key occurs
-- Empty key returns an empty DICT
+| Method | Five output frames |
+| --- | --- |
+| `repeat_last_frame` | A, B, C, C, C |
+| `repeat_from_start` | A, B, C, A, B |
+| `ping_pong` | A, B, C, B, A |
+| `interpolated` | A, halfway from A to B, B, halfway from B to C, C |
 
-Use this node recursively to build larger structured dictionaries before serializing them.
+#### Shorten Video
 
-### Generate JSON from DICT
+Cap the frame count with `n_frames`. For `A B C D E` shortened to three, `cut_end` keeps `A B C`, `cut_beginning` keeps `C D E` and `resample` picks `A C E`.
 
-**Problem:** Structured ComfyUI dictionaries eventually need to become valid JSON text for APIs, prompts or other string-based nodes.
+#### Temporal Smoother
 
-Serializes a DICT into a valid JSON string.
+For a stuttering pan, disable `resample` and inspect `motion_table`. Each transition’s motion is compared with the median of nearby transitions. At `sensitivity = 1`, a duplicate in a moving shot reads `COLLAPSE`, a typical step reads `KEEP`, and twice the local motion reads `INSERT 1`. `0` disables correction.
 
-Inputs:
+Enable `resample` to apply it. `rife` interpolates motion and `blend` crossfades. `scale_analysis` sets RIFE’s internal scale for measuring motion, `scale_fill` for generating frames. The output frame count can change.
 
-- `data` — DICT to serialize
-- `pretty` — formatted multiline JSON when enabled; compact JSON when disabled
+#### Save Video as ProRes
 
-Features:
+Connect frames, set FPS and pick a ProRes profile. Match `input_transfer` to the source (`sRGB` or `Rec.709`). Audio is retimed at constant pitch. At 25 fps, 100 frames make a four-second MOV, so a five-second voice-over plays at 1.25× speed.
 
-- Correct JSON quoting and escaping
-- Supports nested dictionaries automatically
-- Preserves Unicode characters directly
-- Compact mode removes unnecessary whitespace
+For alpha, choose 4444 or 4444 XQ and connect `mask` (white is opaque). `reference_files` stores filenames in order alongside prompt, model and seed. Requires FFmpeg with `prores_ks` and 12-bit support for XQ.
 
-Typical workflow:
+### Audio
 
-```text
-Generate DICT from Key-Value-Pair
-            │
-            ├── nested DICT builders
-            │
-            ▼
-Generate JSON from DICT
-            │
-            ▼
-         JSON string
-```
+Use a recorded line’s duration to work out how much picture the edit needs.
 
----
+#### Get Audio Length
 
-## String Tools
+Connect the voice-over as `AUDIO`. `length_seconds` divides samples by sample rate, so 120,000 samples at 48 kHz give 2.5 seconds.
 
-Category: `KASKI/stringtools`
+### Flow Control
 
-### JSON Key-Value String — Legacy
+Switch optional branches and manage lists of takes or references. Each gate’s `enabled` switch controls all its channels. When off, `return None` supplies empty values and `return executionBlocker` stops downstream execution. A closed gate doesn’t request its channel inputs.
 
-**Problem:** Older workflows may already assemble JSON manually from string fragments and need to remain loadable.
+#### Bundler
 
-Creates a JSON-style key/value string fragment and optionally wraps the value as a nested object.
+Tidy up a cable run. Connect image, mask and ID on the left, then use the matching outputs on the right. Sockets grow as you wire them.
 
-This node is retained for compatibility. New workflows should use `Generate DICT from Key-Value-Pair` together with `Generate JSON from DICT`, which avoids manual JSON-string assembly.
+#### First Valid Input
 
-### String Split at Symbol
+Wire sources in priority order, fallback last. Returns the first value other than `None` or an empty string. `0` and `False` count. All empty gives `None`.
 
-**Problem:** Production filenames and IDs often contain several fields separated by a known delimiter, but only one field is needed downstream.
+#### 1-Channel Gate
 
-Splits `text` by `delimiter` and returns the element at `index`.
+Before an optional upscale, select `return executionBlocker`. Enable the gate when that branch should run.
 
-Features:
+#### 2-Channel Gate
 
-- Custom delimiter
-- Zero-based index
-- Returns an empty string when the requested index does not exist
-- Raises an error when the delimiter is empty
+Wire image and mask separately. `enabled` sends both to the inpainting branch together.
 
-Example:
+#### 3-Channel Gate
 
-```text
-text      = somat_sh012_firstFrame_v3
-delimiter = _
-index     = 1
-```
+Wire plate, depth and normals to the three channels to switch an entire reference set together.
 
-Output:
+#### 4-Channel Gate
 
-```text
-sh012
-```
+Wire image, prompt, model name and seed separately. One switch releases the set for export.
 
-### Join Strings
+#### Enumerate List
 
-**Problem:** Building filenames, IDs, paths or prompt fragments from a variable number of strings otherwise requires chains of concatenation nodes.
+Number takes by connecting their list. Three takes yield the index list `0, 1, 2`.
 
-Joins an autogrowing list of STRING inputs using one delimiter.
+#### Get List Length
 
-Features:
+Count variants with `length`. It counts ComfyUI list items. To count frames inside a batch this way, use Create Image List first.
 
-- 2–50 STRING inputs
-- Inputs grow automatically as connections are added
-- Configurable delimiter
-- Preserves input order
+#### Edit List
 
-### Number to String
+Fit references to a model limit. `edit_length = -1` keeps the length, `0` clears the list. Asking `Remove_Spaced` for three of `A B C D E` keeps `A C E`. To extend, `Loop` cycles the input. `Repeat_First` and `Repeat_Last` append copies of the chosen end item. The default `No_lengthening` leaves short lists alone. Seeded `shuffle` runs after resizing.
 
-**Problem:** Numeric values often need deterministic text formatting before they can be used inside filenames, IDs or prompts.
+#### Append to List
 
-Converts either an integer or float to a STRING.
+Place the hero reference at `First`, `Last` or `At Position`. Positions start at zero. An index past the end appends. An inserted list stays one item.
 
-Features:
+### JSON Tools
 
-- `INT` and `FLOAT` modes
-- Zero padding
-- Configurable decimal places for floats
+Read shot briefs in the graph and assemble API payloads from their fields. When building a dict from JSON or a key–value pair, **Strip new Lines** replaces line breaks inside string values with spaces, even in nested fields.
 
-Example:
+#### Generate DICT from JSON (JSON-Tools)
 
-```text
-42 + zero_padding 4
-```
+Feed in a JSON object such as `{"shots":[]}`, with or without Markdown code fences. Wrap a top-level list in a named field such as `shots`.
 
-becomes:
+#### Generate DICT from Key-Value-Pair (JSON-Tools)
 
-```text
-0042
-```
+Key `takes` and value `3` give `{"takes":3}`. JSON values and fragments are parsed. Plain text stays text. An empty key or value yields an empty dict.
 
----
+#### Generate Dict of Dicts (JSON-Tools)
 
-## ID Tools
+Group fields under a shot ID. With `key` set to `sh007`, `{"stage":"plate"}` and `{"takes":3}` become `{"sh007":{"stage":"plate","takes":3}}`. Later inputs win on duplicate keys.
 
-Category: `KASKI/ID-Tools`
+#### Entry in DICT (JSON-Tools)
 
-KASKI IDs are intended for predictable production naming.
+Check `shots[0].dialogue` before enabling a dialogue branch. `Exists` is true whenever the path exists, even with an empty value.
 
-### Generate Reference ID
+#### Get Value from DICT (JSON-Tools)
 
-**Problem:** Reusable assets such as characters, props and locations need consistent identifiers that can safely travel through filenames and workflows.
+Read a field by path. For `shots[0].refs`, `As Dict` preserves the value under `refs`. An array gives JSON text on `As String` and one string per item on `As String List`. A missing path raises an error.
 
-Builds a reference ID from structured fields.
+#### Get All Values from DICT (JSON-Tools)
 
-Format:
+Collect top-level values for iteration. `{"takes":3,"refs":["A","B"]}` yields `[3]` by default or `[3,["A","B"]]` with `Include Nested`. The second output gives the selected key–value pairs as compact JSON.
 
-```text
-[project_]type_name_[artist_]version
-```
+#### Generate JSON from DICT (JSON-Tools)
 
-Reference types:
+Connect the finished dict. Send compact `JSON` to the API. `Preview` indents it and expands embedded newlines for reading.
 
-- `character`
-- `prop`
-- `location`
-- `material`
+### String Tools
 
-Examples:
+Build prompts and filenames from graph values, or pull one field out of a structured name.
 
-```text
-character_father_v1
-somat_character_father_v3
-somat_character_father_KW_v3
-```
+#### FString Input
 
-Features:
+Use placeholders in a prompt or filename. `sh{input_0:03d}` with integer `7` on `input_0` yields `sh007`. Add `{input_1}` for another value, or use `{{` and `}}` for literal braces.
 
-- Optional project name
-- Optional artist code
-- Numeric version or unresolved `vN`
-- Validates components against the naming convention
-- Letters, numbers and hyphens are allowed inside components; spaces and underscores are not
+#### Join Strings
 
-### Extract Reference ID
+Connect name components in order. Joining `sh007` and `plate` with delimiter `_` gives `sh007_plate`. An empty delimiter joins them directly.
 
-**Problem:** A valid reference ID is often embedded inside a longer filename or path and needs to be recovered without manually parsing the string.
+#### String Split at Symbol
 
-Searches `text` for a valid KASKI reference ID.
+Split `sh007_plate_v2` on `_` and use index `1` to get `plate`. Indices start at zero. An out-of-range index returns an empty string.
 
-`fail_if_not_found`:
+#### Any to String
 
-- `True` — raises an error when no ID is found
-- `False` — passes the original input string through
+Turn a value into text. Lists and dicts use JSON where possible. UTF-8 bytes are decoded as text.
 
-### Generate Shot ID
+### Async Tools
 
-**Problem:** Shot files need predictable names that encode shot number, pipeline stage, artist and version consistently.
+Stagger requests when several branches would otherwise hit an API at once.
 
-Builds a shot ID.
+#### Async Delay
 
-Format:
-
-```text
-[project_]sh[number]_pipelineStep_[artist_]version
-```
-
-Examples:
-
-```text
-sh001_firstFrame_v1
-somat_sh012_enhanced_v4
-somat_sh012_firstFrame_KW_v5
-```
-
-Pipeline stages:
-
-```text
-firstFrame
-lastFrame
-ffToCleanup
-lfToCleanup
-Depth
-Normal
-cgi
-Scribble
-plate
-plateToCleanup
-notEnhanced
-enhanced
-```
-
-Features:
-
-- Optional project name
-- Configurable shot-number zero padding
-- Optional artist code
-- Numeric version or unresolved `vN`
-
-### Modify Shot ID
-
-**Problem:** Existing shot IDs often need one field changed without rebuilding the entire identifier manually.
-
-Accepts an existing valid Shot ID and selectively modifies it.
-
-Features:
-
-- Keep or replace project name
-- Keep or replace shot number
-- Keep or replace pipeline stage
-- Keep or replace artist code
-- Keep or increment the numeric version
-- Configurable shot-number padding
-- Invalid incoming IDs pass through unchanged
-
-### Extract Shot ID
-
-**Problem:** Shot IDs are commonly embedded inside filenames, paths or longer strings and need to be isolated reliably.
-
-Searches `text` for a valid KASKI Shot ID.
-
-`fail_if_not_found`:
-
-- `True` — raises an error when no ID is found
-- `False` — passes the original string through
-
-A compact naming reference is also included in `NamingConventions.pdf`.
-
----
-
-## Filename-Aware Loaders
-
-Category: `KASKI/loaders`
-
-### Load Image with Filename
-
-**Problem:** ComfyUI image workflows normally work with the decoded image, while the original source filename is often needed separately for naming, metadata or ID extraction.
-
-Loads an image and returns:
-
-1. `image`
-2. original `filename`
-3. `mask`
-
-Features:
-
-- Uses ComfyUI's standard image decoding
-- Preserves the basename as STRING
-- Supports normal ComfyUI image upload/selection
-- Preserves standard mask behavior
-
-### Load Video with Filename
-
-**Problem:** Video workflows frequently need the source filename alongside the VIDEO object for metadata, naming or downstream bookkeeping.
-
-Loads a video and returns:
-
-1. `video`
-2. original `filename`
-
-The VIDEO object uses ComfyUI's current file-backed video implementation.
-
----
-
-## Input Conform
-
-Category: `KASKI/InputConform`
-
-### Min/Max Size
-
-**Problem:** An image often needs a target canvas that respects minimum and maximum resolution limits without manually calculating aspect-ratio-safe dimensions.
-
-Calculates recommended output width and height from the input image dimensions and four optional constraints.
-
-Inputs:
-
-- `min_width`
-- `min_height`
-- `max_width`
-- `max_height`
-
-Set any constraint to `0` to disable it.
-
-Features:
-
-- Preserves source aspect ratio whenever the constraints allow it
-- Does not resize the image itself
-- When minimum and maximum limits cannot all be satisfied through scaling, the result assumes remaining minimum size will be created through downstream padding
-
-Outputs:
-
-- `optimal_width`
-- `optimal_height`
-
-### Align Frames to Seconds
-
-**Problem:** Some video pipelines require clips whose duration lands on whole seconds, while a source frame count may not.
-
-Calculates the smallest whole-second duration that contains the source sequence at the selected FPS.
-
-Outputs:
-
-- `frames_to_lengthen_to`
-- `length_in_seconds`
-- `fps`
-
-Example at 24 fps:
-
-```text
-24 frames → 24 frames / 1 second
-25 frames → 48 frames / 2 seconds
-```
-
-### WAN Video Optimals
-
-**Problem:** WAN/VACE workflows require suitable resolution buckets and temporal lengths following the `4n + 1` frame rule.
-
-Inspects an IMAGE sequence and calculates recommended WAN/VACE parameters without modifying the sequence.
-
-Resolution buckets:
-
-```text
-480 × 832
-832 × 480
-512 × 512
-768 × 768
-1024 × 1024
-1280 × 720
-720 × 1280
-```
-
-Outputs:
-
-- `optimal_width`
-- `optimal_height`
-- `optimal_n_frames`
-
-The resolution selection considers aspect ratio, dimension difference and scaling cost. Frame count is expanded to the nearest valid `4n + 1` value at or above the source length.
-
----
-
-## Video Tools
-
-Category: `KASKI/videoTools`
-
-IMAGE batches are interpreted as ordered video frames.
-
-### Extend Video
-
-**Problem:** A generated or processed sequence may contain fewer frames than a downstream video model or conform step requires.
-
-Extends the sequence until it contains at least `n_frames`.
-
-Methods:
-
-- `ping_pong` — continues by reversing and replaying the sequence
-- `repeat_last_frame` — holds the final frame
-- `repeat_from_start` — loops frames from the beginning
-
-Sequences already long enough pass through unchanged.
-
-### Shorten Video
-
-**Problem:** A sequence may contain more frames than a downstream model, duration or delivery format allows.
-
-Reduces the sequence to at most `n_frames`.
-
-Methods:
-
-- `cut_end` — keeps the first frames
-- `cut_beginning` — keeps the last frames
-- `resample` — distributes retained frames across the complete temporal span
-
-Sequences already short enough pass through unchanged.
-
-### Temporal Smoother
-
-**Problem:** AI-generated video can contain irregular apparent motion where individual frame transitions move much more or less than their local temporal neighborhood.
-
-Analyzes frame-to-frame motion with RIFE optical flow and can rebuild the temporal sampling density around motion irregularities.
-
-Inputs:
-
-- `images`
-- `resample`
-- `resample_method`
-  - `rife`
-  - `blend`
-- `sensitivity`
-
-Sensitivity:
-
-- `0` effectively disables correction strength
-- `1` follows the measured motion ratio directly
-- values above `1` increase correction strength
-
-Outputs:
-
-1. processed IMAGE sequence
-2. `motion_table`
-
-The motion table reports frame-level analysis including measured motion, local baseline, motion ratio, sensitivity-adjusted ratio, target temporal intervals and the selected action (`COLLAPSE`, `KEEP` or `INSERT`).
-
-Disable `resample` to run analysis without modifying the sequence.
-
-This is specialized temporal repair tooling, not a general frame-interpolation replacement.
-
----
-
-## Savers
-
-Category: `KASKI/savers`
-
-### Save PNG with metadata
-
-**Problem:** Production images need predictable high-bit-depth output while preserving enough generation metadata to reconstruct or document how they were created.
-
-Saves IMAGE tensors directly as PNG.
-
-Features:
-
-- 8-bit or 16-bit PNG
-- Batch saving
-- No additional gamma or color-space transform
-- Standard ComfyUI workflow metadata
-- Standard ComfyUI execution-prompt metadata
-- Optional `model_name`
-- Optional `user_prompt`
-- Optional `seed`
-- Optional reference IMAGE batch
-- Each reference frame is embedded into the PNG as its own 8-bit PNG payload
-- Standard ComfyUI filename-prefix formatting tokens
-- Returns the input IMAGE batch for downstream use
-
-The node assumes input pixel values already represent the desired display-ready image.
-
-### Save ProRes
-
-**Problem:** IMAGE sequences need a production-friendly MOV export with controlled ProRes profile, correct timing, optional alpha/audio and retained generation provenance.
-
-Encodes an IMAGE batch as Apple ProRes through FFmpeg.
-
-Profiles:
-
-```text
-ProRes 422 Proxy
-ProRes 422 LT
-ProRes 422
-ProRes 422 HQ
-ProRes 4444
-ProRes 4444 XQ
-```
-
-Features:
-
-- Configurable output framerate
-- Optional AUDIO
-- Optional MASK as alpha
-- Autogrowing reference-filename inputs
-- Optional model, prompt and seed metadata
-- Standard ComfyUI workflow/execution metadata
-- Embedded JPEG poster frame for documentation tools
-- Returns both the IMAGE sequence and saved filepath
-
-Alpha:
-
-```text
-black / 0.0 = transparent
-white / 1.0 = visible
-```
-
-Alpha is only used by profiles that support it. A mask connected to a 422 profile is ignored with a warning.
-
-Audio is automatically retimed to:
-
-```text
-duration = frame_count / framerate
-```
-
-Pitch is preserved, then the result is trimmed or padded to the exact video duration. Audio is stored as uncompressed PCM.
-
-The 422 profiles use a 10-bit path. ProRes 4444 supports alpha. ProRes 4444 XQ is treated as a strict 12-bit target and errors when the installed FFmpeg path cannot provide the required encode instead of silently falling back.
-
----
-
-## Async Utilities
-
-Category: `KASKI/async`
-
-### Async Delay
-
-**Problem:** Some workflows need a simple non-blocking timing offset between branches or operations.
-
-Passes an IMAGE through unchanged after `delay` milliseconds.
-
-Features:
-
-- Configurable delay
-- Uses `asyncio.sleep()`
-- Does not intentionally block the complete event loop
-- IMAGE data itself is unchanged
-
----
-
-# Metadata Toolkit
-
-The repository includes:
-
-```text
-KASKI_PNG_MOV_Metadata_Toolkit.html
-```
-
-**Problem:** Generation metadata embedded in production outputs is useful only if it can be inspected and documented without reopening ComfyUI.
-
-The standalone HTML tool runs locally in a browser and supports PNG and MOV files.
-
-For PNG it can inspect:
-
-- output image
-- model
-- seed
-- user prompt
-- ComfyUI workflow
-- ComfyUI execution prompt
-- embedded reference images
-
-For MOV it can inspect:
-
-- embedded poster frame
-- model
-- seed
-- user prompt
-- ComfyUI workflow
-- ComfyUI execution prompt
-- reference filenames
-
-It can also generate documentation PDFs from folders of PNG or MOV outputs.
-
-No ComfyUI server is required to use the metadata toolkit.
+Route a value the call depends on through this node. With `delay` set to `1000` milliseconds, it forwards the same value one second later while other branches can run.

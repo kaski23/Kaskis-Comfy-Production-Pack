@@ -1,0 +1,2679 @@
+import { app } from "../../scripts/app.js";
+
+const BAR = '.actionbar-container, [data-testid="top-menu-actionbars"], .comfyui-menu, .comfy-menu';
+const managerLabels = new Set([
+    "manager", "comfyui manager", "comfyui-manager", "manage extensions", "erweiterungen verwalten",
+]);
+
+function managerIn(bar) {
+    // The built-in Manager also has an icon-only, localized button.
+    const icon = bar.querySelector('[class~="icon-[comfy--extensions-blocks]"]');
+    const nativeButton = icon?.closest('button, [role="button"]');
+    if (nativeButton) return nativeButton;
+    return Array.from(bar.querySelectorAll('button, [role="button"]')).find((button) =>
+        !button.closest('[role="dialog"], [role="menu"]') &&
+        [button.title, button.getAttribute("aria-label"), button.textContent].some((label) =>
+            managerLabels.has(label?.trim().toLowerCase())
+        )
+    );
+}
+
+let toolkitUrl;
+function openToolkit() {
+    // A local Blob opens synchronously from the click, including in offline installs.
+    toolkitUrl ??= URL.createObjectURL(new Blob([toolkitHtml()], { type: "text/html;charset=utf-8" }));
+    window.open(toolkitUrl, "_blank", "noopener,noreferrer");
+}
+
+let observer;
+function installButton() {
+    if (observer) return;
+    const button = document.createElement("button");
+    button.id = "kaski-metadata-toolkit";
+    button.type = "button";
+    button.className = "comfyui-button";
+    button.textContent = "Inspect Metadata";
+    button.title = "Open the PNG / MOV Metadata Toolkit in a new tab";
+    button.style.cssText = "flex:none;white-space:nowrap;cursor:pointer;padding:0.3em 0.65em;border-radius:0.4em;color:inherit;background:var(--comfy-input-bg,transparent)";
+    button.addEventListener("click", openToolkit);
+
+    let frame = 0;
+    let activeBar;
+    function place() {
+        frame = 0;
+        const top = document.querySelector(".actionbar-container");
+        const menu = app.menu?.element;
+        const bars = [...new Set([top, menu, ...document.querySelectorAll(BAR)])]
+            .filter((bar) => bar?.isConnected && bar.getClientRects().length);
+        for (const bar of bars) {
+            const manager = managerIn(bar);
+            if (!manager) continue;
+            activeBar = bar;
+            if (manager.nextElementSibling !== button) manager.after(button);
+            return;
+        }
+
+        // Manager can be disabled or can register after this extension.
+        activeBar = bars[0];
+        if (!activeBar) return;
+        const settings = app.menu?.settingsGroup?.element;
+        if (settings && activeBar.contains(settings)) {
+            if (settings.previousElementSibling !== button) settings.before(button);
+        } else if (button.parentElement !== activeBar) {
+            activeBar.append(button);
+        }
+    }
+
+    function schedule() {
+        if (!frame) frame = requestAnimationFrame(place);
+    }
+    // Vue can replace the whole toolbar on layout changes. Keep a single button.
+    observer = new MutationObserver((records) => {
+        if (!button.isConnected || !activeBar?.isConnected) return schedule();
+        for (const record of records) {
+            if (activeBar.contains(record.target) || record.target.closest?.(BAR)) return schedule();
+            for (const added of record.addedNodes) {
+                if (added.nodeType === 1 && (added.closest(BAR) || added.querySelector(BAR))) return schedule();
+            }
+        }
+    });
+    observer.observe(document.body, { subtree: true, childList: true });
+    place();
+}
+
+app.registerExtension({ name: "KASKI.MetadataToolkit", setup: installButton });
+
+// Self-contained copy of tools_docs/KASKI_PNG_MOV_Metadata_Toolkit.html.
+// ComfyUI serves this pack's web/ directory. Keep the original HTML line endings.
+function toolkitHtml() {
+    return `<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KASKI PNG Metadata Toolkit</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0c0d10;
+    --panel: #14161b;
+    --panel2: #191c22;
+    --panel3: #101217;
+    --border: #2a2e37;
+    --text: #f2f4f7;
+    --muted: #969dab;
+    --accent: #d9e1ff;
+    --danger: #ff8d8d;
+    --success: #9ee6b8;
+    --radius: 14px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+                 "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  body {
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  .app {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 14px;
+  }
+
+  .brand h1 {
+    margin: 0 0 3px;
+    font-size: 18px;
+    font-weight: 650;
+    letter-spacing: .01em;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 11px;
+    background: var(--panel);
+  }
+
+  .tab {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 7px 11px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .tab.active {
+    background: var(--panel2);
+    color: var(--text);
+  }
+
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: minmax(320px, 1.25fr) minmax(320px, .75fr);
+    gap: 16px;
+    min-height: calc(100vh - 112px);
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  .preview-panel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dropzone {
+    position: relative;
+    flex: 1;
+    min-height: 460px;
+    display: grid;
+    place-items: center;
+    background:
+      linear-gradient(45deg, #101217 25%, transparent 25%) 0 0/24px 24px,
+      linear-gradient(-45deg, #101217 25%, transparent 25%) 0 0/24px 24px,
+      linear-gradient(45deg, transparent 75%, #101217 75%) 0 0/24px 24px,
+      linear-gradient(-45deg, transparent 75%, #101217 75%) 0 0/24px 24px,
+      #0f1115;
+  }
+
+  .dropzone.dragover {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .placeholder {
+    max-width: 460px;
+    padding: 30px;
+    text-align: center;
+    color: var(--muted);
+    line-height: 1.5;
+    pointer-events: none;
+  }
+
+  .placeholder strong {
+    display: block;
+    color: var(--text);
+    font-size: 15px;
+    margin-bottom: 6px;
+  }
+
+  #preview {
+    display: none;
+    width: 100%;
+    height: 100%;
+    max-height: calc(100vh - 165px);
+    object-fit: contain;
+  }
+
+  .reference-strip {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 12px;
+    background: var(--panel3);
+  }
+
+  .reference-strip.visible { display: block; }
+
+  .reference-strip-title {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    margin-bottom: 9px;
+  }
+
+  .reference-thumbs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 8px;
+  }
+
+  .reference-thumb {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #0f1115;
+  }
+
+  .preview-footer,
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .toolbar {
+    border-top: 0;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  button, .button {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel2);
+    color: var(--text);
+    border-radius: 9px;
+    padding: 8px 11px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button:hover, .button:hover { border-color: #464c58; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  .primary {
+    background: var(--text);
+    color: #111318;
+    border-color: var(--text);
+    font-weight: 650;
+  }
+
+  input[type=file] { display: none; }
+
+  .metadata {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .metadata-header,
+  .section-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .fields {
+    padding: 14px;
+    overflow: auto;
+  }
+
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+
+  .field-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  label, .label {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+  }
+
+  .copy {
+    padding: 3px 7px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  input[type=text], textarea {
+    width: 100%;
+    border: 1px solid var(--border);
+    background: var(--panel3);
+    color: var(--text);
+    border-radius: 9px;
+    padding: 10px 11px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    resize: vertical;
+    outline: none;
+  }
+
+  input[type=text]:focus, textarea:focus { border-color: #535b69; }
+  #prompt { min-height: 150px; }
+  #workflow { min-height: 180px; }
+
+  details {
+    margin-top: 16px;
+    border-top: 1px solid var(--border);
+    padding-top: 13px;
+  }
+
+  summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    user-select: none;
+  }
+
+  .status-error { color: var(--danger); }
+  .status-success { color: var(--success); }
+
+  /* Batch page */
+  .batch-layout {
+    display: grid;
+    grid-template-columns: minmax(300px, .72fr) minmax(520px, 1.28fr);
+    gap: 16px;
+    min-height: calc(100vh - 112px);
+  }
+
+  .batch-controls {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .batch-body {
+    padding: 16px;
+  }
+
+  .folder-box {
+    border: 1px dashed #3a404c;
+    border-radius: 12px;
+    background: var(--panel3);
+    padding: 26px 20px;
+    text-align: center;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+
+  .folder-box strong {
+    display: block;
+    color: var(--text);
+    margin-bottom: 5px;
+  }
+
+  .folder-actions {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: end;
+    margin-top: 14px;
+  }
+
+  .progress-wrap {
+    margin-top: 14px;
+  }
+
+  progress {
+    width: 100%;
+    height: 8px;
+    appearance: none;
+  }
+
+  progress::-webkit-progress-bar {
+    background: var(--panel3);
+    border-radius: 999px;
+  }
+
+  progress::-webkit-progress-value {
+    background: var(--accent);
+    border-radius: 999px;
+  }
+
+  .help {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.5;
+    margin-top: 12px;
+  }
+
+  .table-wrap {
+    overflow: auto;
+    height: calc(100vh - 170px);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    padding: 10px 12px;
+    background: var(--panel2);
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  td.prompt-cell {
+    max-width: 500px;
+    color: #c7ccd5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  td.muted { color: var(--muted); }
+
+  .empty {
+    padding: 30px;
+    text-align: center;
+    color: var(--muted);
+  }
+
+  @media (max-width: 900px) {
+    body { padding: 12px; }
+
+    header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .grid, .batch-layout {
+      grid-template-columns: 1fr;
+      min-height: 0;
+    }
+
+    .dropzone { min-height: 380px; }
+    #preview { max-height: 65vh; }
+    .table-wrap { height: auto; max-height: 65vh; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <h1>KASKI PNG Metadata Toolkit</h1>
+      <div class="subtitle">100% lokal · keine Uploads · PNG tEXt / iTXt / zTXt</div>
+    </div>
+
+    <nav class="tabs">
+      <button class="tab active" data-page="viewerPage">Single File</button>
+      <button class="tab" data-page="batchPage">PNG Folder → PDF</button>
+      <button class="tab" data-page="videoBatchPage">MOV Folder → PDF</button>
+    </nav>
+  </header>
+
+  <!-- ================================================================
+       Single PNG Viewer
+       ================================================================ -->
+  <main id="viewerPage" class="page active">
+    <div class="grid">
+      <section class="panel preview-panel">
+        <div id="dropzone" class="dropzone">
+          <div id="placeholder" class="placeholder">
+            <strong>PNG oder MOV hier reinziehen</strong>
+            oder klicken, um eine Datei auszuwählen
+          </div>
+          <img id="preview" alt="PNG preview">
+          <canvas id="unifiedVideoPreview"
+                  style="display:none; width:100%; height:100%; max-height:calc(100vh - 165px); object-fit:contain;"></canvas>
+        </div>
+
+        <div id="referenceStrip" class="reference-strip">
+          <div id="referenceStripTitle" class="reference-strip-title">References</div>
+          <div id="referenceThumbs" class="reference-thumbs"></div>
+        </div>
+
+        <div class="preview-footer">
+          <span id="status">Keine Datei geladen</span>
+          <label class="button" for="fileInput">Datei öffnen</label>
+          <input id="fileInput" type="file" accept="image/png,video/quicktime,.png,.mov">
+        </div>
+      </section>
+
+      <section class="panel metadata">
+        <div class="metadata-header">Metadata</div>
+
+        <div class="fields">
+          <div class="field">
+            <div class="field-head">
+              <label for="filename">Dateiname</label>
+              <button class="copy" data-copy="filename">Copy</button>
+            </div>
+            <input id="filename" type="text" readonly>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="model">Modell</label>
+              <button class="copy" data-copy="model">Copy</button>
+            </div>
+            <input id="model" type="text" readonly>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="seed">Seed</label>
+              <button class="copy" data-copy="seed">Copy</button>
+            </div>
+            <input id="seed" type="text" readonly>
+          </div>
+
+          <div id="referenceFilesField" class="field" style="display:none">
+            <div class="field-head">
+              <label for="referenceFiles">Reference Files</label>
+              <button class="copy" data-copy="referenceFiles">Copy</button>
+            </div>
+            <textarea id="referenceFiles" readonly style="min-height:110px"></textarea>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="prompt">Prompt</label>
+              <button class="copy" data-copy="prompt">Copy</button>
+            </div>
+            <textarea id="prompt" readonly></textarea>
+          </div>
+
+          <details>
+            <summary>Comfy Workflow / Execution Prompt</summary>
+            <div class="field" style="margin-top:12px">
+              <div class="field-head">
+                <label for="workflow">Workflow-Metadaten</label>
+                <button class="copy" data-copy="workflow">Copy</button>
+              </div>
+              <textarea id="workflow" readonly></textarea>
+            </div>
+          </details>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ================================================================
+       Folder -> PDF
+       ================================================================ -->
+  <main id="batchPage" class="page">
+    <div class="batch-layout">
+
+      <section class="panel batch-controls">
+        <div class="section-header">PDF Report</div>
+
+        <div class="batch-body">
+          <div class="folder-box" id="folderBox">
+            <strong>Ordner voller PNGs auswählen</strong>
+            Alle PNGs werden lokal gelesen. Pro Bild entsteht eine Dokumentationsseite mit generiertem Bild, eingebetteten Referenzen, Dateiname, Modell, Seed und Prompt.
+
+            <div class="folder-actions">
+              <label class="button primary" for="folderInput">Ordner wählen</label>
+              <input
+                id="folderInput"
+                type="file"
+                accept="image/png,.png"
+                multiple
+                webkitdirectory
+                directory
+              >
+
+              <label class="button" for="multiInput">PNG-Dateien wählen</label>
+              <input
+                id="multiInput"
+                type="file"
+                accept="image/png,.png"
+                multiple
+              >
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="pdfName">PDF-Dateiname</label>
+            </div>
+            <input id="pdfName" type="text" value="KASKI_PNG_Report.pdf">
+          </div>
+
+          <div class="row">
+            <div>
+              <div class="label" style="margin-bottom:6px">Status</div>
+              <div id="batchStatus" class="subtitle">Noch keine PNGs geladen.</div>
+            </div>
+            <button id="generatePdf" class="primary" disabled>PDF erstellen</button>
+          </div>
+
+          <div class="progress-wrap">
+            <progress id="batchProgress" value="0" max="1"></progress>
+          </div>
+
+          <div class="help">
+            Die PDF-Seiten werden im Browser gerendert und anschließend lokal als eine Datei gespeichert. Lange Prompts bekommen automatisch Fortsetzungsseiten. Die Original-PNGs bleiben unverändert.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <span id="batchCount">0 PNGs</span>
+        </div>
+
+        <div id="batchTableWrap" class="table-wrap">
+          <div class="empty" id="batchEmpty">Noch kein Ordner geladen.</div>
+          <table id="batchTable" style="display:none">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Dateiname</th>
+                <th>Modell</th>
+                <th>Seed</th>
+                <th>Prompt</th>
+              </tr>
+            </thead>
+            <tbody id="batchTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ================================================================
+       MOV Folder -> PDF
+       ================================================================ -->
+  <main id="videoBatchPage" class="page">
+    <div class="batch-layout">
+
+      <section class="panel batch-controls">
+        <div class="section-header">Video PDF Report</div>
+
+        <div class="batch-body">
+          <div class="folder-box">
+            <strong>Ordner voller MOVs auswählen</strong>
+            Alle MOVs werden lokal gelesen. Pro Video entsteht eine Dokumentationsseite mit erstem Frame, Dateiname, Modell, Seed, Referenzdateien und Prompt.
+
+            <div class="folder-actions">
+              <label class="button primary" for="videoFolderInput">Ordner wählen</label>
+              <input
+                id="videoFolderInput"
+                type="file"
+                accept="video/quicktime,.mov"
+                multiple
+                webkitdirectory
+                directory
+              >
+
+              <label class="button" for="videoMultiInput">MOV-Dateien wählen</label>
+              <input
+                id="videoMultiInput"
+                type="file"
+                accept="video/quicktime,.mov"
+                multiple
+              >
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-head">
+              <label for="videoPdfName">PDF-Dateiname</label>
+            </div>
+            <input id="videoPdfName" type="text" value="KASKI_MOV_Report.pdf">
+          </div>
+
+          <div class="row">
+            <div>
+              <div class="label" style="margin-bottom:6px">Status</div>
+              <div id="videoBatchStatus" class="subtitle">Noch keine MOVs geladen.</div>
+            </div>
+            <button id="generateVideoPdf" class="primary" disabled>PDF erstellen</button>
+          </div>
+
+          <div class="progress-wrap">
+            <progress id="videoBatchProgress" value="0" max="1"></progress>
+          </div>
+
+          <div class="help">
+            Metadaten werden direkt aus dem QuickTime-Container gelesen. KASKI-MOVs enthalten ein eingebettetes JPEG-Preview-Bild; bei älteren MOVs versucht das Toolkit ersatzweise die lokale Browser-Videodekodierung.
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-header">
+          <span id="videoBatchCount">0 MOVs</span>
+        </div>
+
+        <div class="table-wrap">
+          <div class="empty" id="videoBatchEmpty">Noch kein Ordner geladen.</div>
+          <table id="videoBatchTable" style="display:none">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Dateiname</th>
+                <th>Modell</th>
+                <th>Seed</th>
+                <th>References</th>
+                <th>Prompt</th>
+              </tr>
+            </thead>
+            <tbody id="videoBatchTbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = id => document.getElementById(id);
+
+  const latin1 = new TextDecoder("iso-8859-1");
+  const utf8 = new TextDecoder("utf-8");
+  const ascii = new TextEncoder();
+
+  let currentObjectUrl = null;
+  let currentReferenceUrls = [];
+  let batchEntries = [];
+
+  // ------------------------------------------------------------------
+  // Tabs
+  // ------------------------------------------------------------------
+
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".page").forEach(x => x.classList.remove("active"));
+
+      tab.classList.add("active");
+      $(tab.dataset.page).classList.add("active");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // Shared PNG metadata parser
+  // ------------------------------------------------------------------
+
+  function setField(id, value) {
+    $(id).value = value ?? "";
+  }
+
+  function readUint32BE(view, offset) {
+    return view.getUint32(offset, false);
+  }
+
+  function bytesEqual(bytes, offset, expected) {
+    if (offset + expected.length > bytes.length) return false;
+    for (let i = 0; i < expected.length; i++) {
+      if (bytes[offset + i] !== expected[i]) return false;
+    }
+    return true;
+  }
+
+  function findNull(bytes, start, end = bytes.length) {
+    for (let i = start; i < end; i++) {
+      if (bytes[i] === 0) return i;
+    }
+    return -1;
+  }
+
+  async function inflateZlib(data) {
+    if (!("DecompressionStream" in window)) {
+      throw new Error(
+        "Komprimierte PNG-Textmetadaten werden von diesem Browser nicht unterstützt."
+      );
+    }
+
+    const stream = new Blob([data])
+      .stream()
+      .pipeThrough(new DecompressionStream("deflate"));
+
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function parseTextChunk(type, data) {
+    if (type === "tEXt") {
+      const sep = findNull(data, 0);
+      if (sep < 0) return null;
+
+      return {
+        key: latin1.decode(data.slice(0, sep)),
+        value: latin1.decode(data.slice(sep + 1))
+      };
+    }
+
+    if (type === "zTXt") {
+      const sep = findNull(data, 0);
+      if (sep < 0 || sep + 2 > data.length) return null;
+
+      const key = latin1.decode(data.slice(0, sep));
+      const compressionMethod = data[sep + 1];
+
+      if (compressionMethod !== 0) return null;
+
+      const decompressed = await inflateZlib(data.slice(sep + 2));
+      return {
+        key,
+        value: latin1.decode(decompressed)
+      };
+    }
+
+    if (type === "iTXt") {
+      let p = 0;
+
+      const keywordEnd = findNull(data, p);
+      if (keywordEnd < 0) return null;
+      const key = latin1.decode(data.slice(p, keywordEnd));
+      p = keywordEnd + 1;
+
+      if (p + 2 > data.length) return null;
+      const compressionFlag = data[p++];
+      const compressionMethod = data[p++];
+
+      const languageEnd = findNull(data, p);
+      if (languageEnd < 0) return null;
+      p = languageEnd + 1;
+
+      const translatedEnd = findNull(data, p);
+      if (translatedEnd < 0) return null;
+      p = translatedEnd + 1;
+
+      let textBytes = data.slice(p);
+
+      if (compressionFlag === 1) {
+        if (compressionMethod !== 0) return null;
+        textBytes = await inflateZlib(textBytes);
+      }
+
+      return {
+        key,
+        value: utf8.decode(textBytes)
+      };
+    }
+
+    return null;
+  }
+
+  async function parsePNGMetadata(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const view = new DataView(arrayBuffer);
+    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+
+    if (!bytesEqual(bytes, 0, signature)) {
+      throw new Error("Die Datei ist kein gültiges PNG.");
+    }
+
+    const metadata = {};
+    const referenceImages = [];
+    let offset = 8;
+
+    while (offset + 12 <= bytes.length) {
+      const length = readUint32BE(view, offset);
+      offset += 4;
+
+      if (offset + 4 + length + 4 > bytes.length) {
+        throw new Error("PNG ist beschädigt oder unvollständig.");
+      }
+
+      const type = String.fromCharCode(
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3]
+      );
+      offset += 4;
+
+      const data = bytes.slice(offset, offset + length);
+      offset += length;
+      offset += 4; // CRC
+
+      if (type === "tEXt" || type === "zTXt" || type === "iTXt") {
+        try {
+          const item = await parseTextChunk(type, data);
+          if (item) metadata[item.key] = item.value;
+        } catch (err) {
+          console.warn(\`Could not decode \${type} metadata:\`, err);
+        }
+      }
+
+      if (type === "krFI") {
+        referenceImages.push(data.slice());
+      }
+
+      if (type === "IEND") break;
+    }
+
+    return { metadata, referenceImages };
+  }
+
+  function firstValue(metadata, keys) {
+    for (const key of keys) {
+      const value = metadata[key];
+      if (value !== undefined && value !== null && String(value).trim() !== "") {
+        return String(value);
+      }
+    }
+    return "";
+  }
+
+  function normalizedMetadata(metadata) {
+    return {
+      model: firstValue(metadata, ["model_name", "modelName", "model"]) || "-- Model Info not in Metadata ---",
+      seed: firstValue(metadata, ["seed"]) || "-- Seed not in Metadata ---",
+      prompt: firstValue(metadata, ["user_prompt", "positive_prompt"]) || "-- Prompt not in Metadata ---"
+    };
+  }
+
+  function prettyJSON(value) {
+    if (!value) return "";
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // QuickTime / MOV metadata parser
+  // ------------------------------------------------------------------
+
+  const MOV_FALLBACKS = {
+    model: "-- Model Info not in Metadata ---",
+    seed: "-- Seed not in Metadata ---",
+    prompt: "-- Prompt not in Metadata ---"
+  };
+
+  function readFourCC(bytes, offset) {
+    if (offset + 4 > bytes.length) return "";
+    return String.fromCharCode(
+      bytes[offset],
+      bytes[offset + 1],
+      bytes[offset + 2],
+      bytes[offset + 3]
+    );
+  }
+
+  function readUint64BE(view, offset) {
+    const hi = view.getUint32(offset, false);
+    const lo = view.getUint32(offset + 4, false);
+    return hi * 4294967296 + lo;
+  }
+
+  function readMovBox(bytes, view, offset, limit) {
+    if (offset + 8 > limit) return null;
+
+    let size = readUint32BE(view, offset);
+    const type = readFourCC(bytes, offset + 4);
+    let headerSize = 8;
+
+    if (size === 1) {
+      if (offset + 16 > limit) return null;
+      size = readUint64BE(view, offset + 8);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = limit - offset;
+    }
+
+    if (!Number.isFinite(size) || size < headerSize || offset + size > limit) {
+      return null;
+    }
+
+    return {
+      type,
+      start: offset,
+      size,
+      headerSize,
+      dataStart: offset + headerSize,
+      end: offset + size
+    };
+  }
+
+  function listMovBoxes(bytes, view, start, end) {
+    const boxes = [];
+    let offset = start;
+
+    while (offset + 8 <= end) {
+      const box = readMovBox(bytes, view, offset, end);
+      if (!box) break;
+      boxes.push(box);
+      offset = box.end;
+    }
+
+    return boxes;
+  }
+
+  function findChildBox(bytes, view, parentStart, parentEnd, type, skipBytes = 0) {
+    return listMovBoxes(bytes, view, parentStart + skipBytes, parentEnd)
+      .find(box => box.type === type) || null;
+  }
+
+  function parseMdtaKeys(bytes, view, keysBox) {
+    const keys = new Map();
+    if (!keysBox || keysBox.dataStart + 8 > keysBox.end) return keys;
+
+    let p = keysBox.dataStart + 4; // version + flags
+    const count = readUint32BE(view, p);
+    p += 4;
+
+    for (let i = 1; i <= count && p + 8 <= keysBox.end; i++) {
+      const entrySize = readUint32BE(view, p);
+      if (entrySize < 8 || p + entrySize > keysBox.end) break;
+
+      const namespace = readFourCC(bytes, p + 4);
+      const keyBytes = bytes.slice(p + 8, p + entrySize);
+      const key = utf8.decode(keyBytes);
+
+      if (namespace === "mdta" && key) {
+        keys.set(i, key);
+      }
+
+      p += entrySize;
+    }
+
+    return keys;
+  }
+
+  function decodeMovMetadataValue(typeCode, payload) {
+    if (typeCode === 1 || typeCode === 0) {
+      return utf8.decode(payload);
+    }
+
+    if (typeCode === 21 && payload.length >= 1 && payload.length <= 8) {
+      let value = 0;
+      for (const byte of payload) value = value * 256 + byte;
+      return String(value);
+    }
+
+    try {
+      return utf8.decode(payload);
+    } catch {
+      return "";
+    }
+  }
+
+  function parseMdtaIlst(bytes, view, ilstBox, keys) {
+    const metadata = {};
+    if (!ilstBox) return metadata;
+
+    for (const item of listMovBoxes(bytes, view, ilstBox.dataStart, ilstBox.end)) {
+      const keyIndex = (
+        (bytes[item.start + 4] << 24) |
+        (bytes[item.start + 5] << 16) |
+        (bytes[item.start + 6] << 8) |
+        bytes[item.start + 7]
+      ) >>> 0;
+
+      const key = keys.get(keyIndex);
+      if (!key) continue;
+
+      const dataBox = findChildBox(bytes, view, item.dataStart, item.end, "data");
+      if (!dataBox || dataBox.dataStart + 8 > dataBox.end) continue;
+
+      const typeCode = readUint32BE(view, dataBox.dataStart) & 0x00ffffff;
+      const payload = bytes.slice(dataBox.dataStart + 8, dataBox.end);
+      metadata[key] = decodeMovMetadataValue(typeCode, payload);
+    }
+
+    return metadata;
+  }
+
+  function findMovMetaBox(bytes, view) {
+    const top = listMovBoxes(bytes, view, 0, bytes.length);
+    const moov = top.find(box => box.type === "moov");
+    if (!moov) return null;
+
+    const udta = findChildBox(bytes, view, moov.dataStart, moov.end, "udta");
+    if (udta) {
+      const meta = findChildBox(bytes, view, udta.dataStart, udta.end, "meta");
+      if (meta) return meta;
+    }
+
+    return findChildBox(bytes, view, moov.dataStart, moov.end, "meta");
+  }
+
+  async function readFileSlice(file, start, end) {
+    return await file.slice(start, end).arrayBuffer();
+  }
+
+  async function readTopLevelBoxHeader(file, offset) {
+    const probeEnd = Math.min(file.size, offset + 16);
+    const buffer = await readFileSlice(file, offset, probeEnd);
+    const bytes = new Uint8Array(buffer);
+    const view = new DataView(buffer);
+
+    if (bytes.length < 8) return null;
+
+    let size = readUint32BE(view, 0);
+    const type = readFourCC(bytes, 4);
+    let headerSize = 8;
+
+    if (size === 1) {
+      if (bytes.length < 16) return null;
+      size = readUint64BE(view, 8);
+      headerSize = 16;
+    } else if (size === 0) {
+      size = file.size - offset;
+    }
+
+    if (!Number.isFinite(size) || size < headerSize || offset + size > file.size) {
+      return null;
+    }
+
+    return {
+      type,
+      start: offset,
+      size,
+      headerSize,
+      end: offset + size
+    };
+  }
+
+  async function findTopLevelMovBox(file, wantedType) {
+    let offset = 0;
+
+    while (offset + 8 <= file.size) {
+      const box = await readTopLevelBoxHeader(file, offset);
+      if (!box) {
+        throw new Error("MOV ist beschädigt oder enthält ungültige Boxen.");
+      }
+
+      if (box.type === wantedType) return box;
+
+      offset = box.end;
+    }
+
+    return null;
+  }
+
+  async function parseMOVMetadataFromFile(file) {
+    const moovBox = await findTopLevelMovBox(file, "moov");
+    if (!moovBox) {
+      throw new Error("MOV enthält keine moov-Box.");
+    }
+
+    // Only read the moov box; mdat/video payload is intentionally untouched.
+    const moovBuffer = await readFileSlice(file, moovBox.start, moovBox.end);
+    const bytes = new Uint8Array(moovBuffer);
+    const view = new DataView(moovBuffer);
+
+    const metadata = {};
+    const moov = readMovBox(bytes, view, 0, bytes.length);
+    if (!moov || moov.type !== "moov") {
+      throw new Error("moov-Box konnte nicht gelesen werden.");
+    }
+
+    const udta = findChildBox(bytes, view, moov.dataStart, moov.end, "udta");
+    let meta = null;
+
+    if (udta) {
+      meta = findChildBox(bytes, view, udta.dataStart, udta.end, "meta");
+    }
+
+    if (!meta) {
+      meta = findChildBox(bytes, view, moov.dataStart, moov.end, "meta");
+    }
+
+    if (!meta) return metadata;
+
+    const keys = findChildBox(bytes, view, meta.dataStart, meta.end, "keys", 4);
+    const ilst = findChildBox(bytes, view, meta.dataStart, meta.end, "ilst", 4);
+
+    return parseMdtaIlst(
+      bytes,
+      view,
+      ilst,
+      parseMdtaKeys(bytes, view, keys)
+    );
+  }
+
+  function parseReferenceFiles(metadata) {
+    const raw = firstValue(metadata, ["reference_files"]);
+    if (!raw) return [];
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map(value => String(value).trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // Fall through to a human-readable single entry.
+    }
+
+    return [raw];
+  }
+
+  function normalizedMovMetadata(metadata) {
+    return {
+      model: firstValue(metadata, ["model_name", "modelName", "model"]) || MOV_FALLBACKS.model,
+      seed: firstValue(metadata, ["seed"]) || MOV_FALLBACKS.seed,
+      prompt: firstValue(metadata, ["user_prompt", "positive_prompt"]) || MOV_FALLBACKS.prompt,
+      references: parseReferenceFiles(metadata)
+    };
+  }
+
+  function formatReferenceFiles(references) {
+    if (!references?.length) return "";
+    return references.join("\\n");
+  }
+
+  function base64ToBytes(value) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    return bytes;
+  }
+
+  async function loadEmbeddedPosterFrame(metadata) {
+    const encoded = firstValue(metadata, ["poster_frame_jpeg"]);
+    if (!encoded) return null;
+
+    const bytes = base64ToBytes(encoded);
+    const blob = new Blob([bytes], { type: "image/jpeg" });
+    return await loadBitmap(blob);
+  }
+
+  async function captureFirstVideoFrame(file) {
+    const url = URL.createObjectURL(file);
+
+    try {
+      const video = document.createElement("video");
+      video.preload = "auto";
+      video.muted = true;
+      video.playsInline = true;
+      video.src = url;
+
+      await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          video.removeEventListener("loadeddata", onLoaded);
+          video.removeEventListener("error", onError);
+        };
+
+        const onLoaded = () => {
+          cleanup();
+          resolve();
+        };
+
+        const onError = () => {
+          cleanup();
+          reject(new Error(
+            "Der Browser kann den Videocodec nicht dekodieren."
+          ));
+        };
+
+        video.addEventListener("loadeddata", onLoaded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        video.load();
+      });
+
+      if (!video.videoWidth || !video.videoHeight) {
+        throw new Error("Video Preview Image could not be obtained.");
+      }
+
+      // loadeddata exposes the first decodable frame at the start position.
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      return canvas;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function drawCanvasIntoCanvas(source, target) {
+    target.width = source.width;
+    target.height = source.height;
+    const ctx = target.getContext("2d", { alpha: false });
+    ctx.drawImage(source, 0, 0);
+  }
+
+  // ------------------------------------------------------------------
+  // Single viewer
+  // ------------------------------------------------------------------
+
+  const dropzone = $("dropzone");
+  const fileInput = $("fileInput");
+  const preview = $("preview");
+  const placeholder = $("placeholder");
+  const status = $("status");
+  const referenceStrip = $("referenceStrip");
+  const referenceStripTitle = $("referenceStripTitle");
+  const referenceThumbs = $("referenceThumbs");
+
+  function clearReferencePreview() {
+    for (const url of currentReferenceUrls) URL.revokeObjectURL(url);
+    currentReferenceUrls = [];
+    referenceThumbs.innerHTML = "";
+    referenceStrip.classList.remove("visible");
+  }
+
+  function renderReferencePreview(referenceImages) {
+    clearReferencePreview();
+
+    if (!referenceImages?.length) return;
+
+    referenceStripTitle.textContent =
+      \`References · \${referenceImages.length}\`;
+
+    for (const bytes of referenceImages) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      currentReferenceUrls.push(url);
+
+      const img = document.createElement("img");
+      img.className = "reference-thumb";
+      img.alt = "Embedded reference";
+      img.src = url;
+      referenceThumbs.appendChild(img);
+    }
+
+    referenceStrip.classList.add("visible");
+  }
+
+  const unifiedVideoPreview = $("unifiedVideoPreview");
+  const referenceFilesField = $("referenceFilesField");
+
+  function resetUnifiedPreview() {
+    if (currentObjectUrl) {
+      URL.revokeObjectURL(currentObjectUrl);
+      currentObjectUrl = null;
+    }
+
+    clearReferencePreview();
+
+    preview.removeAttribute("src");
+    preview.style.display = "none";
+
+    const vctx = unifiedVideoPreview.getContext("2d");
+    vctx.clearRect(0, 0, unifiedVideoPreview.width, unifiedVideoPreview.height);
+    unifiedVideoPreview.style.display = "none";
+
+    referenceFilesField.style.display = "none";
+    setField("referenceFiles", "");
+
+    placeholder.innerHTML =
+      "<strong>PNG oder MOV hier reinziehen</strong>" +
+      "oder klicken, um eine Datei auszuwählen";
+    placeholder.style.display = "block";
+  }
+
+  function isSupportedSingleFile(file) {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".png") || name.endsWith(".mov");
+  }
+
+  async function loadSinglePNG(file) {
+    const buffer = await file.arrayBuffer();
+    const parsed = await parsePNGMetadata(buffer);
+    const metadata = parsed.metadata;
+    const normalized = normalizedMetadata(metadata);
+
+    setField("filename", file.name);
+    setField("model", normalized.model);
+    setField("seed", normalized.seed);
+    setField("prompt", normalized.prompt);
+
+    const workflowParts = [];
+    if (metadata.workflow) {
+      workflowParts.push("WORKFLOW\\\\n\\\\n" + prettyJSON(metadata.workflow));
+    }
+    if (metadata.prompt) {
+      workflowParts.push("EXECUTION PROMPT\\\\n\\\\n" + prettyJSON(metadata.prompt));
+    }
+    setField("workflow", workflowParts.join("\\\\n\\\\n\\\\n"));
+
+    currentObjectUrl = URL.createObjectURL(file);
+    preview.src = currentObjectUrl;
+    preview.style.display = "block";
+    unifiedVideoPreview.style.display = "none";
+    placeholder.style.display = "none";
+
+    renderReferencePreview(parsed.referenceImages);
+
+    const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
+    const refInfo = parsed.referenceImages.length
+      ? \` · \${parsed.referenceImages.length} Referenzbild\${parsed.referenceImages.length === 1 ? "" : "er"}\`
+      : "";
+
+    status.textContent =
+      \`\${sizeMiB} MB · PNG · \${Object.keys(metadata).length} Text-Metadatenfelder\${refInfo}\`;
+  }
+
+  async function loadSingleMOV(file) {
+    const metadata = await parseMOVMetadataFromFile(file);
+    const normalized = normalizedMovMetadata(metadata);
+
+    setField("filename", file.name);
+    setField("model", normalized.model);
+    setField("seed", normalized.seed);
+    setField("prompt", normalized.prompt);
+
+    if (normalized.references.length) {
+      referenceFilesField.style.display = "block";
+      setField("referenceFiles", formatReferenceFiles(normalized.references));
+    }
+
+    const workflowParts = [];
+    if (metadata.workflow) {
+      workflowParts.push("WORKFLOW\\\\n\\\\n" + prettyJSON(metadata.workflow));
+    }
+    if (metadata.prompt) {
+      workflowParts.push("EXECUTION PROMPT\\\\n\\\\n" + prettyJSON(metadata.prompt));
+    }
+    setField("workflow", workflowParts.join("\\\\n\\\\n\\\\n"));
+
+    let frameInfo = "";
+
+    try {
+      let frame = await loadEmbeddedPosterFrame(metadata);
+      let frameSource = "eingebetteter Preview-Bild";
+
+      if (!frame) {
+        frame = await captureFirstVideoFrame(file);
+        frameSource = "Video Preview";
+      }
+
+      drawCanvasIntoCanvas(frame, unifiedVideoPreview);
+      unifiedVideoPreview.style.display = "block";
+      preview.style.display = "none";
+      placeholder.style.display = "none";
+      frameInfo = \` · \${frame.width}×\${frame.height} \${frameSource}\`;
+
+      if (typeof frame.close === "function") {
+        frame.close();
+      }
+    } catch (frameErr) {
+      console.warn(frameErr);
+      placeholder.innerHTML =
+        "<strong>Frame-Vorschau nicht verfügbar</strong>" +
+        "Weder eingebetteter Preview-Bild noch Browser-Decoding waren verfügbar.";
+      placeholder.style.display = "block";
+      frameInfo = " · Frame-Vorschau nicht verfügbar";
+    }
+
+    const sizeMiB = (file.size / 1024 / 1024).toFixed(2);
+    const refInfo = normalized.references.length
+      ? \` · \${normalized.references.length} Referenzdatei\${normalized.references.length === 1 ? "" : "en"}\`
+      : "";
+
+    status.textContent =
+      \`\${sizeMiB} MB · MOV · \${Object.keys(metadata).length} Metadata-Felder\${refInfo}\${frameInfo}\`;
+  }
+
+  async function loadSingleFile(file) {
+    if (!file) return;
+
+    if (!isSupportedSingleFile(file)) {
+      status.textContent = "Bitte eine PNG- oder MOV-Datei auswählen.";
+      status.className = "status-error";
+      return;
+    }
+
+    status.className = "";
+    status.textContent = "Lese Datei…";
+    resetUnifiedPreview();
+
+    try {
+      if (file.name.toLowerCase().endsWith(".mov")) {
+        await loadSingleMOV(file);
+      } else {
+        await loadSinglePNG(file);
+      }
+    } catch (err) {
+      console.error(err);
+      status.textContent = err?.message || String(err);
+      status.className = "status-error";
+    }
+  }
+
+  dropzone.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", event => {
+    loadSingleFile(event.target.files?.[0]);
+  });
+
+  ["dragenter", "dragover"].forEach(type => {
+    dropzone.addEventListener(type, event => {
+      event.preventDefault();
+      event.stopPropagation();
+      dropzone.classList.add("dragover");
+    });
+  });
+
+  ["dragleave", "drop"].forEach(type => {
+    dropzone.addEventListener(type, event => {
+      event.preventDefault();
+      event.stopPropagation();
+      dropzone.classList.remove("dragover");
+    });
+  });
+
+  dropzone.addEventListener("drop", event => {
+    loadSingleFile(event.dataTransfer?.files?.[0]);
+  });
+
+  document.addEventListener("paste", event => {
+    const files = [...(event.clipboardData?.files || [])];
+    const media = files.find(file => {
+      const name = file.name.toLowerCase();
+      return name.endsWith(".png") || name.endsWith(".mov");
+    });
+    if (media) loadSingleFile(media);
+  });
+
+  document.querySelectorAll("[data-copy]").forEach(button => {
+    button.addEventListener("click", async event => {
+      event.stopPropagation();
+
+      const source = $(button.dataset.copy);
+      const value = source?.value || "";
+      if (!value) return;
+
+      try {
+        await navigator.clipboard.writeText(value);
+        const original = button.textContent;
+        button.textContent = "Copied";
+        setTimeout(() => button.textContent = original, 800);
+      } catch {
+        source.focus();
+        source.select();
+        document.execCommand("copy");
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // Batch folder loader
+  // ------------------------------------------------------------------
+
+  const folderInput = $("folderInput");
+  const multiInput = $("multiInput");
+  const batchStatus = $("batchStatus");
+  const batchProgress = $("batchProgress");
+  const batchCount = $("batchCount");
+  const batchTable = $("batchTable");
+  const batchEmpty = $("batchEmpty");
+  const batchTbody = $("batchTbody");
+  const generatePdf = $("generatePdf");
+
+  function isPNG(file) {
+    return (
+      file.type === "image/png" ||
+      file.name.toLowerCase().endsWith(".png")
+    );
+  }
+
+  function relativeName(file) {
+    return file.webkitRelativePath || file.name;
+  }
+
+  async function loadBatch(files) {
+    const pngFiles = [...files]
+      .filter(isPNG)
+      .sort((a, b) =>
+        relativeName(a).localeCompare(relativeName(b), undefined, {
+          numeric: true,
+          sensitivity: "base"
+        })
+      );
+
+    batchEntries = [];
+    batchTbody.innerHTML = "";
+    generatePdf.disabled = true;
+    batchProgress.max = Math.max(1, pngFiles.length);
+    batchProgress.value = 0;
+
+    if (!pngFiles.length) {
+      batchCount.textContent = "0 PNGs";
+      batchTable.style.display = "none";
+      batchEmpty.style.display = "block";
+      batchEmpty.textContent = "Keine PNG-Dateien gefunden.";
+      batchStatus.textContent = "Der gewählte Ordner enthält keine PNGs.";
+      batchStatus.className = "subtitle status-error";
+      return;
+    }
+
+    batchTable.style.display = "table";
+    batchEmpty.style.display = "none";
+    batchStatus.className = "subtitle";
+
+    for (let i = 0; i < pngFiles.length; i++) {
+      const file = pngFiles[i];
+
+      batchStatus.textContent = \`Lese Metadaten \${i + 1}/\${pngFiles.length}: \${file.name}\`;
+
+      try {
+        const parsed = await parsePNGMetadata(await file.arrayBuffer());
+        const metadata = parsed.metadata;
+        const normalized = normalizedMetadata(metadata);
+
+        batchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata,
+          referenceImages: parsed.referenceImages,
+          ...normalized
+        });
+      } catch (err) {
+        console.warn(\`Skipping metadata for \${file.name}:\`, err);
+        batchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata: {},
+          referenceImages: [],
+          model: "-- Model Info not in Metadata ---",
+          seed: "-- Seed not in Metadata ---",
+          prompt: "-- Prompt not in Metadata ---"
+        });
+      }
+
+      batchProgress.value = i + 1;
+    }
+
+    renderBatchTable();
+
+    batchStatus.textContent =
+      \`\${batchEntries.length} PNG\${batchEntries.length === 1 ? "" : "s"} geladen.\`;
+    batchStatus.className = "subtitle status-success";
+    generatePdf.disabled = false;
+  }
+
+  function escapeHTML(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderBatchTable() {
+    batchCount.textContent =
+      \`\${batchEntries.length} PNG\${batchEntries.length === 1 ? "" : "s"}\`;
+
+    batchTbody.innerHTML = batchEntries.map((entry, i) => {
+      const prompt = entry.prompt || "";
+      const preview = prompt.length > 300 ? prompt.slice(0, 300) + "…" : prompt;
+
+      return \`
+        <tr>
+          <td class="muted">\${i + 1}</td>
+          <td>\${escapeHTML(entry.path)}</td>
+          <td>\${escapeHTML(entry.model)}</td>
+          <td>\${escapeHTML(entry.seed)}</td>
+          <td class="prompt-cell">\${escapeHTML(preview)}</td>
+        </tr>
+      \`;
+    }).join("");
+  }
+
+  folderInput.addEventListener("change", event => loadBatch(event.target.files || []));
+  multiInput.addEventListener("change", event => loadBatch(event.target.files || []));
+
+  // ------------------------------------------------------------------
+  // Image loading for PDF
+  // ------------------------------------------------------------------
+
+  async function loadBitmap(file) {
+    if ("createImageBitmap" in window) {
+      try {
+        return await createImageBitmap(file);
+      } catch {
+        // Fall through to HTMLImageElement.
+      }
+    }
+
+    return await new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error(\`Bild konnte nicht dekodiert werden: \${file.name}\`));
+      };
+
+      img.src = url;
+    });
+  }
+
+  async function loadEmbeddedBitmap(bytes) {
+    return loadBitmap(new Blob([bytes], { type: "image/png" }));
+  }
+
+  async function loadReferenceBitmaps(referenceImages) {
+    const bitmaps = [];
+
+    for (const bytes of referenceImages || []) {
+      try {
+        bitmaps.push(await loadEmbeddedBitmap(bytes));
+      } catch (err) {
+        console.warn("Embedded reference image could not be decoded:", err);
+      }
+    }
+
+    return bitmaps;
+  }
+
+  function bitmapDimensions(bitmap) {
+    return {
+      width: bitmap.width || bitmap.naturalWidth,
+      height: bitmap.height || bitmap.naturalHeight
+    };
+  }
+
+  // ------------------------------------------------------------------
+  // Canvas page rendering
+  // ------------------------------------------------------------------
+
+  const PAGE_W = 1240;
+  const PAGE_H = 1754;
+  const MARGIN = 72;
+  const CONTENT_W = PAGE_W - MARGIN * 2;
+
+  function setupCanvas() {
+    const canvas = document.createElement("canvas");
+    canvas.width = PAGE_W;
+    canvas.height = PAGE_H;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, PAGE_W, PAGE_H);
+
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#111111";
+
+    return { canvas, ctx };
+  }
+
+  function wrapText(ctx, text, maxWidth) {
+    const source = String(text || "").replace(/\\r\\n/g, "\\n");
+    const paragraphs = source.split("\\n");
+    const lines = [];
+
+    for (let p = 0; p < paragraphs.length; p++) {
+      const paragraph = paragraphs[p];
+
+      if (paragraph === "") {
+        lines.push("");
+        continue;
+      }
+
+      const words = paragraph.split(/\\s+/);
+      let line = "";
+
+      for (const word of words) {
+        const candidate = line ? line + " " + word : word;
+
+        if (ctx.measureText(candidate).width <= maxWidth) {
+          line = candidate;
+          continue;
+        }
+
+        if (line) {
+          lines.push(line);
+          line = "";
+        }
+
+        // Hard-wrap a single oversized word/token.
+        if (ctx.measureText(word).width > maxWidth) {
+          let chunk = "";
+
+          for (const char of word) {
+            const test = chunk + char;
+
+            if (ctx.measureText(test).width > maxWidth && chunk) {
+              lines.push(chunk);
+              chunk = char;
+            } else {
+              chunk = test;
+            }
+          }
+
+          line = chunk;
+        } else {
+          line = word;
+        }
+      }
+
+      if (line) lines.push(line);
+    }
+
+    return lines;
+  }
+
+  function drawLabel(ctx, label, value, x, y, maxWidth) {
+    ctx.font = "600 21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#777777";
+    ctx.fillText(label.toUpperCase(), x, y);
+
+    ctx.font = "24px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#111111";
+
+    const lines = wrapText(ctx, value, maxWidth);
+    const lineHeight = 32;
+    let cy = y + 30;
+
+    for (const line of lines) {
+      ctx.fillText(line || " ", x, cy);
+      cy += lineHeight;
+    }
+
+    return cy;
+  }
+
+  function drawHeader(ctx, entry, continuation = false) {
+    ctx.fillStyle = "#111111";
+    ctx.font = "600 30px Arial, Helvetica, sans-serif";
+
+    const title = continuation
+      ? \`\${entry.file.name} — Prompt continued\`
+      : entry.file.name;
+
+    const titleLines = wrapText(ctx, title, CONTENT_W);
+    let y = MARGIN;
+
+    for (const line of titleLines.slice(0, 2)) {
+      ctx.fillText(line, MARGIN, y);
+      y += 38;
+    }
+
+    ctx.strokeStyle = "#dddddd";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(MARGIN, y + 10);
+    ctx.lineTo(PAGE_W - MARGIN, y + 10);
+    ctx.stroke();
+
+    return y + 34;
+  }
+
+  function drawReferenceGrid(ctx, bitmaps, top, height) {
+    if (!bitmaps.length || height <= 0) return top;
+
+    ctx.font = "600 21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#777777";
+    ctx.fillText(\`REFERENCES · \${bitmaps.length}\`, MARGIN, top);
+
+    const gridTop = top + 34;
+    const gridHeight = Math.max(1, height - 34);
+    const gap = 12;
+    const columns = Math.min(6, Math.max(1, bitmaps.length));
+    const rows = Math.ceil(bitmaps.length / columns);
+    const cellW = (CONTENT_W - gap * (columns - 1)) / columns;
+    const cellH = (gridHeight - gap * (rows - 1)) / rows;
+
+    for (let i = 0; i < bitmaps.length; i++) {
+      const bitmap = bitmaps[i];
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+      const x = MARGIN + col * (cellW + gap);
+      const y = gridTop + row * (cellH + gap);
+
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(x, y, cellW, cellH);
+
+      const dims = bitmapDimensions(bitmap);
+      const scale = Math.min(cellW / dims.width, cellH / dims.height);
+      const drawW = Math.max(1, dims.width * scale);
+      const drawH = Math.max(1, dims.height * scale);
+      const drawX = x + (cellW - drawW) / 2;
+      const drawY = y + (cellH - drawH) / 2;
+
+      ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
+    }
+
+    return top + height;
+  }
+
+  async function renderEntryPages(entry) {
+    const pages = [];
+    const bitmap = await loadBitmap(entry.file);
+    const referenceBitmaps = await loadReferenceBitmaps(entry.referenceImages);
+
+    // Main image page.
+    {
+      const { canvas, ctx } = setupCanvas();
+      let y = drawHeader(ctx, entry, false);
+
+      const imageTop = y;
+      const hasReferences = referenceBitmaps.length > 0;
+      const imageBottom = hasReferences ? 820 : 1055;
+      const imageBoxH = imageBottom - imageTop;
+
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(MARGIN, imageTop, CONTENT_W, imageBoxH);
+
+      const dims = bitmapDimensions(bitmap);
+      const scale = Math.min(
+        CONTENT_W / dims.width,
+        imageBoxH / dims.height
+      );
+
+      const drawW = Math.max(1, dims.width * scale);
+      const drawH = Math.max(1, dims.height * scale);
+      const drawX = MARGIN + (CONTENT_W - drawW) / 2;
+      const drawY = imageTop + (imageBoxH - drawH) / 2;
+
+      ctx.drawImage(bitmap, drawX, drawY, drawW, drawH);
+
+      if (hasReferences) {
+        y = drawReferenceGrid(
+          ctx,
+          referenceBitmaps,
+          imageBottom + 28,
+          230
+        ) + 28;
+      } else {
+        y = imageBottom + 36;
+      }
+
+      // Model / seed on one row.
+      const columnGap = 36;
+      const colW = (CONTENT_W - columnGap) / 2;
+
+      drawLabel(ctx, "Model", entry.model, MARGIN, y, colW);
+      drawLabel(ctx, "Seed", entry.seed, MARGIN + colW + columnGap, y, colW);
+
+      y += 100;
+
+      ctx.font = "600 21px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#777777";
+      ctx.fillText("PROMPT", MARGIN, y);
+      y += 34;
+
+      ctx.font = "24px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#111111";
+
+      const promptLines = wrapText(ctx, entry.prompt, CONTENT_W);
+      const lineHeight = 32;
+      const maxMainLines = Math.max(1, Math.floor((PAGE_H - MARGIN - y) / lineHeight));
+      const mainLines = promptLines.slice(0, maxMainLines);
+
+      for (const line of mainLines) {
+        ctx.fillText(line || " ", MARGIN, y);
+        y += lineHeight;
+      }
+
+      pages.push(canvas);
+
+      // Prompt continuation pages.
+      let remaining = promptLines.slice(maxMainLines);
+
+      while (remaining.length) {
+        const continuation = setupCanvas();
+        const cctx = continuation.ctx;
+        let cy = drawHeader(cctx, entry, true);
+
+        cctx.font = "24px Arial, Helvetica, sans-serif";
+        cctx.fillStyle = "#111111";
+
+        const maxLines = Math.max(
+          1,
+          Math.floor((PAGE_H - MARGIN - cy) / lineHeight)
+        );
+
+        const chunk = remaining.slice(0, maxLines);
+
+        for (const line of chunk) {
+          cctx.fillText(line || " ", MARGIN, cy);
+          cy += lineHeight;
+        }
+
+        remaining = remaining.slice(maxLines);
+        pages.push(continuation.canvas);
+      }
+    }
+
+    if (typeof bitmap.close === "function") {
+      bitmap.close();
+    }
+
+    for (const refBitmap of referenceBitmaps) {
+      if (typeof refBitmap.close === "function") {
+        refBitmap.close();
+      }
+    }
+
+    return pages;
+  }
+
+  async function canvasToJpegBytes(canvas) {
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        result => result ? resolve(result) : reject(new Error("JPEG rendering failed.")),
+        "image/jpeg",
+        0.91
+      );
+    });
+
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
+  // ------------------------------------------------------------------
+  // MOV batch loader
+  // ------------------------------------------------------------------
+
+  const videoFolderInput = $("videoFolderInput");
+  const videoMultiInput = $("videoMultiInput");
+  const videoBatchStatus = $("videoBatchStatus");
+  const videoBatchProgress = $("videoBatchProgress");
+  const videoBatchCount = $("videoBatchCount");
+  const videoBatchTable = $("videoBatchTable");
+  const videoBatchEmpty = $("videoBatchEmpty");
+  const videoBatchTbody = $("videoBatchTbody");
+  const generateVideoPdf = $("generateVideoPdf");
+
+  let videoBatchEntries = [];
+
+  function isMOV(file) {
+    return file.name.toLowerCase().endsWith(".mov");
+  }
+
+  async function loadVideoBatch(files) {
+    const movFiles = [...files]
+      .filter(isMOV)
+      .sort((a, b) =>
+        relativeName(a).localeCompare(relativeName(b), undefined, {
+          numeric: true,
+          sensitivity: "base"
+        })
+      );
+
+    videoBatchEntries = [];
+    videoBatchTbody.innerHTML = "";
+    generateVideoPdf.disabled = true;
+    videoBatchProgress.max = Math.max(1, movFiles.length);
+    videoBatchProgress.value = 0;
+
+    if (!movFiles.length) {
+      videoBatchCount.textContent = "0 MOVs";
+      videoBatchTable.style.display = "none";
+      videoBatchEmpty.style.display = "block";
+      videoBatchEmpty.textContent = "Keine MOV-Dateien gefunden.";
+      videoBatchStatus.textContent = "Der gewählte Ordner enthält keine MOVs.";
+      videoBatchStatus.className = "subtitle status-error";
+      return;
+    }
+
+    videoBatchTable.style.display = "table";
+    videoBatchEmpty.style.display = "none";
+    videoBatchStatus.className = "subtitle";
+
+    for (let i = 0; i < movFiles.length; i++) {
+      const file = movFiles[i];
+
+      videoBatchStatus.textContent =
+        \`Lese Metadaten \${i + 1}/\${movFiles.length}: \${file.name}\`;
+
+      try {
+        const metadata = await parseMOVMetadataFromFile(file);
+        const normalized = normalizedMovMetadata(metadata);
+
+        videoBatchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata,
+          ...normalized
+        });
+      } catch (err) {
+        console.warn(\`Skipping metadata for \${file.name}:\`, err);
+        videoBatchEntries.push({
+          file,
+          path: relativeName(file),
+          metadata: {},
+          model: MOV_FALLBACKS.model,
+          seed: MOV_FALLBACKS.seed,
+          prompt: MOV_FALLBACKS.prompt,
+          references: []
+        });
+      }
+
+      videoBatchProgress.value = i + 1;
+    }
+
+    renderVideoBatchTable();
+
+    videoBatchStatus.textContent =
+      \`\${videoBatchEntries.length} MOV\${videoBatchEntries.length === 1 ? "" : "s"} geladen.\`;
+    videoBatchStatus.className = "subtitle status-success";
+    generateVideoPdf.disabled = false;
+  }
+
+  function renderVideoBatchTable() {
+    videoBatchCount.textContent =
+      \`\${videoBatchEntries.length} MOV\${videoBatchEntries.length === 1 ? "" : "s"}\`;
+
+    videoBatchTbody.innerHTML = videoBatchEntries.map((entry, i) => {
+      const prompt = entry.prompt || "";
+      const promptPreview =
+        prompt.length > 300 ? prompt.slice(0, 300) + "…" : prompt;
+
+      const references = entry.references?.length
+        ? entry.references.join(", ")
+        : "—";
+
+      return \`
+        <tr>
+          <td class="muted">\${i + 1}</td>
+          <td>\${escapeHTML(entry.file.name)}</td>
+          <td>\${escapeHTML(entry.model)}</td>
+          <td>\${escapeHTML(entry.seed)}</td>
+          <td class="prompt-cell">\${escapeHTML(references)}</td>
+          <td class="prompt-cell">\${escapeHTML(promptPreview)}</td>
+        </tr>
+      \`;
+    }).join("");
+  }
+
+  videoFolderInput.addEventListener(
+    "change",
+    event => loadVideoBatch(event.target.files || [])
+  );
+
+  videoMultiInput.addEventListener(
+    "change",
+    event => loadVideoBatch(event.target.files || [])
+  );
+
+  // ------------------------------------------------------------------
+  // MOV PDF page rendering
+  // ------------------------------------------------------------------
+
+  function drawVideoReferenceFiles(ctx, references, x, y, maxWidth, maxHeight) {
+    if (!references?.length) return y;
+
+    ctx.font = "600 21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#777777";
+    ctx.fillText(\`REFERENCE FILES · \${references.length}\`, x, y);
+    y += 34;
+
+    ctx.font = "21px Arial, Helvetica, sans-serif";
+    ctx.fillStyle = "#111111";
+
+    const lines = [];
+    references.forEach((reference, index) => {
+      const prefix = \`\${index + 1}. \`;
+      const wrapped = wrapText(ctx, prefix + reference, maxWidth);
+      lines.push(...wrapped);
+    });
+
+    const lineHeight = 28;
+    const maxLines = Math.max(1, Math.floor(maxHeight / lineHeight));
+
+    for (const line of lines.slice(0, maxLines)) {
+      ctx.fillText(line, x, y);
+      y += lineHeight;
+    }
+
+    if (lines.length > maxLines) {
+      ctx.fillStyle = "#777777";
+      ctx.fillText(
+        \`… \${lines.length - maxLines} weitere Zeile\${lines.length - maxLines === 1 ? "" : "n"}\`,
+        x,
+        y
+      );
+      y += lineHeight;
+    }
+
+    return y;
+  }
+
+  async function renderVideoEntryPages(entry) {
+    const pages = [];
+    let firstFrame = null;
+    let frameError = null;
+
+    try {
+      firstFrame = await loadEmbeddedPosterFrame(entry.metadata);
+
+      if (!firstFrame) {
+        firstFrame = await captureFirstVideoFrame(entry.file);
+      }
+    } catch (err) {
+      frameError = err;
+      console.warn(\`Could not obtain video preview image for \${entry.file.name}:\`, err);
+    }
+
+    {
+      const { canvas, ctx } = setupCanvas();
+
+      // Dedicated filename header: never include selected folder path.
+      const headerEntry = {
+        ...entry,
+        path: entry.file.name
+      };
+
+      let y = drawHeader(ctx, headerEntry, false);
+
+      const imageTop = y;
+      const imageBottom = entry.references?.length ? 840 : 1000;
+      const imageBoxH = imageBottom - imageTop;
+
+      ctx.fillStyle = "#f2f2f2";
+      ctx.fillRect(MARGIN, imageTop, CONTENT_W, imageBoxH);
+
+      if (firstFrame) {
+        const dims = bitmapDimensions(firstFrame);
+        const scale = Math.min(
+          CONTENT_W / dims.width,
+          imageBoxH / dims.height
+        );
+
+        const drawW = Math.max(1, dims.width * scale);
+        const drawH = Math.max(1, dims.height * scale);
+        const drawX = MARGIN + (CONTENT_W - drawW) / 2;
+        const drawY = imageTop + (imageBoxH - drawH) / 2;
+
+        ctx.drawImage(firstFrame, drawX, drawY, drawW, drawH);
+      } else {
+        ctx.font = "600 28px Arial, Helvetica, sans-serif";
+        ctx.fillStyle = "#777777";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          "VIDEO PREVIEW IMAGE COULD NOT BE OBTAINED",
+          PAGE_W / 2,
+          imageTop + imageBoxH / 2 - 18
+        );
+
+        ctx.font = "20px Arial, Helvetica, sans-serif";
+        ctx.fillText(
+          frameError?.message || "Video frame unavailable",
+          PAGE_W / 2,
+          imageTop + imageBoxH / 2 + 22
+        );
+        ctx.textAlign = "left";
+      }
+
+      y = imageBottom + 28;
+
+      if (entry.references?.length) {
+        y = drawVideoReferenceFiles(
+          ctx,
+          entry.references,
+          MARGIN,
+          y,
+          CONTENT_W,
+          155
+        ) + 18;
+      }
+
+      const columnGap = 36;
+      const colW = (CONTENT_W - columnGap) / 2;
+
+      drawLabel(ctx, "Model", entry.model, MARGIN, y, colW);
+      drawLabel(ctx, "Seed", entry.seed, MARGIN + colW + columnGap, y, colW);
+
+      y += 100;
+
+      ctx.font = "600 21px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#777777";
+      ctx.fillText("PROMPT", MARGIN, y);
+      y += 34;
+
+      ctx.font = "24px Arial, Helvetica, sans-serif";
+      ctx.fillStyle = "#111111";
+
+      const promptLines = wrapText(ctx, entry.prompt, CONTENT_W);
+      const lineHeight = 32;
+      const maxMainLines = Math.max(
+        1,
+        Math.floor((PAGE_H - MARGIN - y) / lineHeight)
+      );
+      const mainLines = promptLines.slice(0, maxMainLines);
+
+      for (const line of mainLines) {
+        ctx.fillText(line || " ", MARGIN, y);
+        y += lineHeight;
+      }
+
+      pages.push(canvas);
+
+      let remaining = promptLines.slice(maxMainLines);
+
+      while (remaining.length) {
+        const continuation = setupCanvas();
+        const cctx = continuation.ctx;
+
+        const continuationEntry = {
+          ...entry,
+          path: entry.file.name
+        };
+
+        let cy = drawHeader(cctx, continuationEntry, true);
+
+        cctx.font = "24px Arial, Helvetica, sans-serif";
+        cctx.fillStyle = "#111111";
+
+        const maxLines = Math.max(
+          1,
+          Math.floor((PAGE_H - MARGIN - cy) / lineHeight)
+        );
+
+        const chunk = remaining.slice(0, maxLines);
+
+        for (const line of chunk) {
+          cctx.fillText(line || " ", MARGIN, cy);
+          cy += lineHeight;
+        }
+
+        remaining = remaining.slice(maxLines);
+        pages.push(continuation.canvas);
+      }
+    }
+
+    if (firstFrame && typeof firstFrame.close === "function") {
+      firstFrame.close();
+    }
+
+    return pages;
+  }
+
+  generateVideoPdf.addEventListener("click", async () => {
+    if (!videoBatchEntries.length) return;
+
+    generateVideoPdf.disabled = true;
+    videoFolderInput.disabled = true;
+    videoMultiInput.disabled = true;
+
+    videoBatchStatus.className = "subtitle";
+    videoBatchProgress.max = videoBatchEntries.length;
+    videoBatchProgress.value = 0;
+
+    try {
+      const jpegPages = [];
+
+      for (let i = 0; i < videoBatchEntries.length; i++) {
+        const entry = videoBatchEntries[i];
+
+        videoBatchStatus.textContent =
+          \`Rendere \${i + 1}/\${videoBatchEntries.length}: \${entry.file.name}\`;
+
+        const canvases = await renderVideoEntryPages(entry);
+
+        for (const canvas of canvases) {
+          jpegPages.push(await canvasToJpegBytes(canvas));
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        videoBatchProgress.value = i + 1;
+      }
+
+      videoBatchStatus.textContent =
+        \`Baue PDF mit \${jpegPages.length} Seite\${jpegPages.length === 1 ? "" : "n"}…\`;
+
+      const pdf = buildPDF(jpegPages);
+      const filename = sanitizePdfName($("videoPdfName").value);
+
+      downloadBytes(pdf, filename, "application/pdf");
+
+      videoBatchStatus.textContent =
+        \`\${filename} erstellt · \${jpegPages.length} Seite\${jpegPages.length === 1 ? "" : "n"} · \` +
+        \`\${(pdf.length / 1024 / 1024).toFixed(1)} MB\`;
+      videoBatchStatus.className = "subtitle status-success";
+
+    } catch (err) {
+      console.error(err);
+      videoBatchStatus.textContent = err?.message || String(err);
+      videoBatchStatus.className = "subtitle status-error";
+
+    } finally {
+      generateVideoPdf.disabled = videoBatchEntries.length === 0;
+      videoFolderInput.disabled = false;
+      videoMultiInput.disabled = false;
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // Tiny offline PDF writer
+  // Each canvas page becomes one JPEG XObject.
+  // ------------------------------------------------------------------
+
+  function concatBytes(parts) {
+    const total = parts.reduce((sum, p) => sum + p.length, 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+
+    for (const part of parts) {
+      out.set(part, offset);
+      offset += part.length;
+    }
+
+    return out;
+  }
+
+  function textBytes(text) {
+    return ascii.encode(text);
+  }
+
+  function buildPDF(jpegPages) {
+    // Object numbers:
+    // 1 Catalog
+    // 2 Pages
+    // then per page: Page, Image, Content
+    const objectCount = 2 + jpegPages.length * 3;
+    const objects = new Array(objectCount + 1);
+
+    const pageRefs = [];
+
+    for (let i = 0; i < jpegPages.length; i++) {
+      const pageObj = 3 + i * 3;
+      const imageObj = pageObj + 1;
+      const contentObj = pageObj + 2;
+
+      pageRefs.push(\`\${pageObj} 0 R\`);
+
+      const imageName = \`Im\${i + 1}\`;
+      const content = \`q\\n595.28 0 0 841.89 0 0 cm\\n/\${imageName} Do\\nQ\\n\`;
+      const contentData = textBytes(content);
+
+      objects[pageObj] = textBytes(
+        \`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] \` +
+        \`/Resources << /XObject << /\${imageName} \${imageObj} 0 R >> >> \` +
+        \`/Contents \${contentObj} 0 R >>\`
+      );
+
+      const jpeg = jpegPages[i];
+
+      objects[imageObj] = concatBytes([
+        textBytes(
+          \`<< /Type /XObject /Subtype /Image /Width \${PAGE_W} /Height \${PAGE_H} \` +
+          \`/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode \` +
+          \`/Length \${jpeg.length} >>\\nstream\\n\`
+        ),
+        jpeg,
+        textBytes("\\nendstream")
+      ]);
+
+      objects[contentObj] = concatBytes([
+        textBytes(\`<< /Length \${contentData.length} >>\\nstream\\n\`),
+        contentData,
+        textBytes("endstream")
+      ]);
+    }
+
+    objects[1] = textBytes("<< /Type /Catalog /Pages 2 0 R >>");
+    objects[2] = textBytes(
+      \`<< /Type /Pages /Count \${jpegPages.length} /Kids [\${pageRefs.join(" ")}] >>\`
+    );
+
+    const parts = [textBytes("%PDF-1.4\\n%KASKI\\n")];
+    const offsets = new Array(objectCount + 1).fill(0);
+    let position = parts[0].length;
+
+    for (let n = 1; n <= objectCount; n++) {
+      offsets[n] = position;
+
+      const prefix = textBytes(\`\${n} 0 obj\\n\`);
+      const suffix = textBytes("\\nendobj\\n");
+
+      parts.push(prefix, objects[n], suffix);
+      position += prefix.length + objects[n].length + suffix.length;
+    }
+
+    const xrefOffset = position;
+
+    let xref =
+      \`xref\\n0 \${objectCount + 1}\\n\` +
+      \`0000000000 65535 f \\n\`;
+
+    for (let n = 1; n <= objectCount; n++) {
+      xref += \`\${String(offsets[n]).padStart(10, "0")} 00000 n \\n\`;
+    }
+
+    xref +=
+      \`trailer\\n<< /Size \${objectCount + 1} /Root 1 0 R >>\\n\` +
+      \`startxref\\n\${xrefOffset}\\n%%EOF\\n\`;
+
+    parts.push(textBytes(xref));
+
+    return concatBytes(parts);
+  }
+
+  function sanitizePdfName(name) {
+    let value = String(name || "").trim() || "KASKI_PNG_Report.pdf";
+    value = value.replace(/[\\\\/:*?"<>|]+/g, "_");
+    if (!value.toLowerCase().endsWith(".pdf")) value += ".pdf";
+    return value;
+  }
+
+  function downloadBytes(bytes, filename, mime) {
+    const blob = new Blob([bytes], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  generatePdf.addEventListener("click", async () => {
+    if (!batchEntries.length) return;
+
+    generatePdf.disabled = true;
+    folderInput.disabled = true;
+    multiInput.disabled = true;
+
+    batchStatus.className = "subtitle";
+    batchProgress.max = batchEntries.length;
+    batchProgress.value = 0;
+
+    try {
+      const jpegPages = [];
+
+      for (let i = 0; i < batchEntries.length; i++) {
+        const entry = batchEntries[i];
+
+        batchStatus.textContent =
+          \`Rendere \${i + 1}/\${batchEntries.length}: \${entry.path}\`;
+
+        const canvases = await renderEntryPages(entry);
+
+        for (const canvas of canvases) {
+          jpegPages.push(await canvasToJpegBytes(canvas));
+          // Let the UI breathe on large folders.
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        batchProgress.value = i + 1;
+      }
+
+      batchStatus.textContent =
+        \`Baue PDF mit \${jpegPages.length} Seite\${jpegPages.length === 1 ? "" : "n"}…\`;
+
+      const pdf = buildPDF(jpegPages);
+      const filename = sanitizePdfName($("pdfName").value);
+
+      downloadBytes(pdf, filename, "application/pdf");
+
+      batchStatus.textContent =
+        \`\${filename} erstellt · \${jpegPages.length} Seite\${jpegPages.length === 1 ? "" : "n"} · \` +
+        \`\${(pdf.length / 1024 / 1024).toFixed(1)} MB\`;
+      batchStatus.className = "subtitle status-success";
+
+    } catch (err) {
+      console.error(err);
+      batchStatus.textContent = err?.message || String(err);
+      batchStatus.className = "subtitle status-error";
+
+    } finally {
+      generatePdf.disabled = batchEntries.length === 0;
+      folderInput.disabled = false;
+      multiInput.disabled = false;
+    }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
+    clearReferencePreview();
+  });
+})();
+</script>
+</body>
+</html>
+`.replace(/\n/g, "\r\n");
+}

@@ -1,0 +1,7 @@
+from .reference_ids import REFERENCE_ID_NODES_LIST
+from .shot_ids import SHOT_ID_NODES_LIST
+from .sequence_ids import SEQUENCE_ID_NODES_LIST
+
+ID_TOOLS_NODES_LIST = (
+    REFERENCE_ID_NODES_LIST + SHOT_ID_NODES_LIST + SEQUENCE_ID_NODES_LIST
+)

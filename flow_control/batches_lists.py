@@ -245,9 +245,73 @@ class AppendToList_KASKI(io.ComfyNode):
         return bool(list_outputs and list_outputs[output_index])
 
 
+class CreateList_KASKI(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="CreateList_KASKI",
+            display_name="Create List",
+            category="KASKI/flow_control",
+            description="Create a native ComfyUI list from Any inputs.",
+            is_input_list=True,
+            inputs=[
+                io.Autogrow.Input(
+                    "inputs",
+                    template=io.Autogrow.TemplatePrefix(
+                        input=io.AnyType.Input("item"),
+                        prefix="item_",
+                        min=0,
+                        max=100,
+                    ),
+                    tooltip="One item per socket. An upstream list stays one nested item.",
+                ),
+            ],
+            outputs=[
+                io.AnyType.Output(display_name="items", is_output_list=True),
+            ],
+            hidden=[io.Hidden.dynprompt, io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(cls, inputs: io.Autogrow.Type) -> io.NodeOutput:
+        result = []
+        for name, values in (inputs or {}).items():
+            if len(values) == 1 and not cls._source_is_list_output(name):
+                result.append(values[0])
+            else:
+                result.append(list(values))
+        return io.NodeOutput(result)
+
+    @classmethod
+    def _source_is_list_output(cls, socket_name: str) -> bool:
+        hidden = cls.hidden
+        if hidden is None or hidden.dynprompt is None:
+            return False
+
+        prompt = hidden.dynprompt
+        node_inputs = prompt.get_node(hidden.unique_id)["inputs"]
+
+        link = node_inputs.get(socket_name)
+        if link is None:
+            link = node_inputs.get(f"inputs.{socket_name}")
+        if link is None and isinstance(node_inputs.get("inputs"), dict):
+            link = node_inputs["inputs"].get(socket_name)
+        if not is_link(link):
+            return False
+
+        source_id, output_index = link
+        source_node = prompt.get_node(source_id)
+        source_class = NODE_CLASS_MAPPINGS[source_node["class_type"]]
+        list_outputs = getattr(source_class, "OUTPUT_IS_LIST", ())
+        return (
+            0 <= output_index < len(list_outputs)
+            and bool(list_outputs[output_index])
+        )
+
 BATCHES_LISTS_NODES_LIST = [
     EnumerateList_KASKI,
     GetListLength_KASKI,
     EditList_KASKI,
     AppendToList_KASKI,
+    CreateList_KASKI,
 ]

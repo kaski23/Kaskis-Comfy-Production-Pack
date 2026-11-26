@@ -54,7 +54,10 @@ class GetValueFromDict(io.ComfyNode):
                 io.String.Output(
                     display_name="As String",
                     is_output_list=False,
-                    tooltip="One string for the entire value. Lists are formatted as JSON array text.",
+                    tooltip=(
+                        "One string for the entire value. "
+                        "Lists are formatted as JSON array text."
+                    ),
                 ),
                 io.Dict.Output(
                     display_name="As Dict",
@@ -68,7 +71,17 @@ class GetValueFromDict(io.ComfyNode):
                     is_output_list=True,
                     tooltip=(
                         "A ComfyUI list with one string per item, or one string "
-                        "for a single value. Values are converted with str()."
+                        "for a single value. Dicts and lists are serialized as JSON; "
+                        "other values are converted with str()."
+                    ),
+                ),
+                io.Dict.Output(
+                    display_name="As Dict List",
+                    is_output_list=True,
+                    tooltip=(
+                        "A ComfyUI list with one dict per item, or one dict "
+                        "for a single value. Each value is stored under the "
+                        "final path segment, preserving its original type."
                     ),
                 ),
             ],
@@ -97,14 +110,30 @@ class GetValueFromDict(io.ComfyNode):
                 except (IndexError, ValueError):
                     raise ValueError(not_found) from None
 
+        as_dict = {segment: value}
+
         if isinstance(value, list):
             as_string = json.dumps(value, ensure_ascii=False, indent=2)
-            as_string_list = [str(item) for item in value]
+            items = value
         else:
             as_string = str(value)
-            as_string_list = [as_string]
+            items = [value]
 
-        return io.NodeOutput(as_string, {segment: value}, as_string_list)
+        as_string_list = [
+            json.dumps(item, ensure_ascii=False)
+            if isinstance(item, (dict, list))
+            else str(item)
+            for item in items
+        ]
+
+        as_dict_list = [{segment: item} for item in items]
+
+        return io.NodeOutput(
+            as_string,
+            as_dict,
+            as_string_list,
+            as_dict_list,
+        )
 
     @classmethod
     def fingerprint_inputs(cls, **_inputs):
@@ -113,7 +142,7 @@ class GetValueFromDict(io.ComfyNode):
             (output.io_type, output.is_output_list)
             for output in cls.define_schema().outputs
         )
-        return "json arrays and plain values", output_layout
+        return "json arrays and plain values; JSON dict/list string items", output_layout
 
 
 

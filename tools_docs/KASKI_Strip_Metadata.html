@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KASKI · Strip Metadata</title>
+<style>
+  :root { color-scheme: dark; --bg:#0c0d10; --panel:#15171c; --border:#30333d; --text:#f2f4f7; --muted:#a2a9b5; --accent:#d9e1ff; --success:#98e6b8; --error:#ff9d9d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:34px 24px 70px; }
+  .heading { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:12px; margin-bottom:24px; }
+  h1 { font-size:26px; line-height:1.15; letter-spacing:-.04em; margin:0 0 7px; }
+  .eyebrow { color:#9da9d6; font-size:11px; letter-spacing:.16em; font-weight:700; margin-bottom:9px; }
+  .muted { color:var(--muted); }
+  .heading p { margin:0; }
+  .badge { border:1px solid var(--border); border-radius:99px; padding:7px 12px; color:var(--muted); font-size:12px; }
+  .drop { width:100%; min-height:260px; border:1px dashed #5a6174; border-radius:18px; background:linear-gradient(140deg,#1b1e27,#121419); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:11px; padding:26px; text-align:center; cursor:pointer; transition:background .15s,border-color .15s,transform .15s; }
+  .drop:hover,.drop.over { border-color:var(--accent); background:#222735; transform:translateY(-1px); }
+  .symbol { font-size:38px; color:#b7c4ec; line-height:1; font-weight:200; }
+  .drop strong { font-size:18px; font-weight:600; }
+  .drop span { color:var(--muted); font-size:13px; }
+  .actions { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; margin:18px 0; }
+  button { appearance:none; background:#252b3a; color:var(--text); border:1px solid #414958; border-radius:9px; padding:10px 14px; font:inherit; font-size:13px; cursor:pointer; }
+  button:hover { background:#30384a; }
+  button:disabled { cursor:not-allowed; opacity:.45; }
+  .summary { font-variant-numeric:tabular-nums; font-size:13px; }
+  .list { list-style:none; padding:0; margin:0; display:grid; gap:7px; }
+  .item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px; border-radius:10px; background:var(--panel); border:1px solid var(--border); }
+  .item .name { overflow-wrap:anywhere; min-width:0; }
+  .item small { display:block; color:var(--muted); margin-top:3px; }
+  .item.error small { color:var(--error); }
+  .item.done small { color:var(--success); }
+  .item a { flex:none; color:var(--accent); font-size:13px; text-decoration:none; border:1px solid #414958; border-radius:7px; padding:7px 9px; }
+  .item a:hover { background:#30384a; }
+  .note { border-top:1px solid var(--border); margin-top:24px; padding-top:15px; font-size:12px; color:var(--muted); }
+  .note p { margin:0 0 7px; }
+  input[type=file] { display:none; }
+  @media(max-width:560px) { main { padding:24px 15px; } .drop { min-height:210px; } .item { align-items:flex-start; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="heading">
+    <div><div class="eyebrow">KASKI / LOCAL TOOLS</div><h1>Strip Metadata</h1><p class="muted">PNG-Bildserien und ProRes-MOVs lokal bereinigen. Bild- und Videodaten bleiben unverändert.</p></div>
+    <span class="badge">Läuft im Browser · kein Upload</span>
+  </div>
+  <div id="drop" class="drop" role="button" tabindex="0" aria-label="PNG oder MOV Dateien auswählen">
+    <div class="symbol" aria-hidden="true">＋</div>
+    <strong>Bilder oder Videos hier reinziehen</strong>
+    <span>Mehrere PNGs gleichzeitig möglich · oder klicken und Dateien auswählen</span>
+    <span>Beispiel: <b>shot_001.png → shot_001_nM.png</b></span>
+  </div>
+  <input id="files" type="file" accept=".png,.mov,image/png,video/quicktime" multiple>
+  <div class="actions">
+    <span id="summary" class="summary muted" role="status" aria-live="polite">Warte auf Dateien.</span>
+    <div><button id="zip" type="button" disabled>Bildserie als ZIP</button> <button id="clear" type="button" disabled>Liste leeren</button></div>
+  </div>
+  <ul id="list" class="list"></ul>
+  <div class="note">
+    <p>Jede Datei wird einzeln als <b>_nM.png</b> oder <b>_nM.mov</b> heruntergeladen. Falls dein Browser mehrere automatische Downloads blockiert, nutze „Bildserie als ZIP“ für alle PNGs oder die einzelnen „Download“-Links.</p>
+    <p>PNG: Text, Workflow, Referenz-Chunks, EXIF und Farbprofile werden entfernt; ein eingebettetes Farbprofil kann die Darstellung beeinflussen. MOV: Beschreibende Container-Metadaten und Zeitstempel werden entfernt; Codec-, Farb- und Zeitangaben bleiben für die Wiedergabe erhalten. ProRes-Bilddaten enthalten gegebenenfalls eine technische Encoder-Kennung.</p>
+    <p>Der Browser entscheidet über den Download-Ordner; wenn „Vor jedem Download nach Speicherort fragen“ aktiv ist, erscheint weiterhin ein Dialog.</p>
+  </div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const pngSignature = [137,80,78,71,13,10,26,10];
+  const pngImageChunks = new Set(['IHDR','PLTE','IDAT','IEND','tRNS','acTL','fcTL','fdAT']);
+  const movContainers = new Set(['moov','trak','mdia','minf','stbl','edts','dinf']);
+  const movMetadata = new Set(['udta','meta','uuid','XMP_','xml ']);
+  const movTopLevel = new Set(['ftyp','wide','mdat','moov','free','skip',...movMetadata]);
+  const proresSamples = new Set(['apco','apcs','apcn','apch','ap4h','ap4x']);
+  const videoSamples = new Set([...proresSamples,'avc1','avc3','hvc1','hev1','mp4v','jpeg','png ']);
+  const audioSamples = new Set(['in24','lpcm','sowt','twos']);
+  const crcTable=Uint32Array.from({length:256},(_,index)=>{
+    let value=index;
+    for (let i=0;i<8;i++) value=(value>>>1) ^ (value & 1 ? 0xedb88320 : 0);
+    return value>>>0;
+  });
+
+  function fourcc(bytes, offset) {
+    return String.fromCharCode(...bytes.subarray(offset, offset+4));
+  }
+  function writeFourcc(bytes, offset, value) {
+    for (let i=0;i<4;i++) bytes[offset+i]=value.charCodeAt(i);
+  }
+  function readU32BE(bytes, offset) {
+    return new DataView(bytes.buffer,bytes.byteOffset+offset,4).getUint32(0,false);
+  }
+  function writeU16LE(view, offset, value) { view.setUint16(offset,value,true); }
+  function writeU32LE(view, offset, value) { view.setUint32(offset,value>>>0,true); }
+  function crc32(bytes) {
+    let crc=0xffffffff;
+    for (const byte of bytes) crc=crcTable[(crc ^ byte)&255] ^ (crc>>>8);
+    return (crc ^ 0xffffffff)>>>0;
+  }
+
+  async function stripPng(file) {
+    const bytes=new Uint8Array(await file.arrayBuffer());
+    if (!pngSignature.every((byte,i)=>bytes[i]===byte)) throw new Error('Keine gültige PNG-Datei.');
+    const parts=[bytes.slice(0,8)];
+    let pos=8, chunks=0, idat=false, done=false;
+    while (pos<bytes.length) {
+      if (bytes.length-pos<12) throw new Error('Abgeschnittener PNG-Chunk.');
+      const size=readU32BE(bytes,pos), type=fourcc(bytes,pos+4);
+      const end=pos+12+size;
+      if (!Number.isSafeInteger(end) || end>bytes.length) throw new Error('Ungültige PNG-Chunk-Größe.');
+      if (chunks++===0 && type!=='IHDR') throw new Error('PNG ohne IHDR.');
+      if (type==='IHDR' && size!==13) throw new Error('Ungültiger PNG-Header.');
+      if (type==='IDAT') idat=true;
+      if (pngImageChunks.has(type)) {
+        if (crc32(bytes.subarray(pos+4,end-4))!==readU32BE(bytes,end-4))
+          throw new Error(`CRC-Fehler im PNG-Chunk ${type}.`);
+        parts.push(bytes.slice(pos,end));
+      } else if (/^[A-Z]/.test(type)) {
+        throw new Error(`Unbekannter kritischer PNG-Chunk ${type}; kann ihn nicht sicher entfernen.`);
+      }
+      pos=end;
+      if (type==='IEND') { done=true; break; }
+    }
+    if (!done || !idat) throw new Error('PNG enthält keine vollständigen Bilddaten.');
+    // Bytes after IEND are also discarded; they can contain appended metadata.
+    return new Blob(parts,{type:'image/png'});
+  }
+
+  function boxes(bytes,start,end) {
+    const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+    const result=[];
+    for (let pos=start;pos<end;) {
+      if (end-pos<8) throw new Error('Abgeschnittener MOV-Atom-Header.');
+      let size=view.getUint32(pos,false), header=8;
+      const type=fourcc(bytes,pos+4);
+      if (size===1) {
+        if (end-pos<16) throw new Error('Abgeschnittener MOV-Langheader.');
+        const longSize=view.getBigUint64(pos+8,false);
+        if (longSize>BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('MOV-Atom zu groß.');
+        size=Number(longSize); header=16;
+      } else if (size===0) size=end-pos;
+      if (size<header || size>end-pos) throw new Error('Ungültige MOV-Atom-Größe.');
+      result.push({start:pos,end:pos+size,payload:pos+header,header,type});
+      pos+=size;
+    }
+    return result;
+  }
+  function scrubSamples(bytes, box) {
+    if (box.end-box.payload<8) throw new Error('Abgeschnittene MOV-Sample-Tabelle.');
+    const entries=boxes(bytes,box.payload+8,box.end);
+    if (entries.length!==readU32BE(bytes,box.payload+4)) throw new Error('Ungültige MOV-Sample-Tabelle.');
+    for (const entry of entries) {
+      if (videoSamples.has(entry.type)) {
+        if (entry.end-entry.start<86) throw new Error('Abgeschnittener Video-Sample-Eintrag.');
+        bytes.fill(0,entry.start+20,entry.start+24); // Herstellerkennung
+        bytes.fill(0,entry.start+50,entry.start+82); // Encoder-Name
+      } else if (audioSamples.has(entry.type)) {
+        if (entry.end-entry.start<24) throw new Error('Abgeschnittener Audio-Sample-Eintrag.');
+        bytes.fill(0,entry.start+20,entry.start+24);
+      }
+    }
+  }
+  function scrubMoov(bytes,header) {
+    const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+    function walk(start,end) {
+      for (const box of boxes(bytes,start,end)) {
+        if (movMetadata.has(box.type)) {
+          writeFourcc(bytes,box.start+4,'free');
+          bytes.fill(0,box.payload,box.end);
+        } else if (movContainers.has(box.type)) {
+          walk(box.payload,box.end);
+        } else if (['mvhd','tkhd','mdhd'].includes(box.type)) {
+          const width=bytes[box.payload]===1?8:4;
+          if (box.end-box.payload<4+width*2) throw new Error('Abgeschnittene MOV-Zeitfelder.');
+          bytes.fill(0,box.payload+4,box.payload+4+width*2);
+        } else if (box.type==='hdlr') {
+          if (box.end-box.payload<24) throw new Error('Abgeschnittener MOV-Handler.');
+          bytes.fill(0,box.payload+24,box.end);
+        } else if (box.type==='stsd') scrubSamples(bytes,box);
+      }
+    }
+    walk(header,bytes.length);
+    return bytes;
+  }
+  async function topBox(file,offset) {
+    const head=new Uint8Array(await file.slice(offset,Math.min(offset+16,file.size)).arrayBuffer());
+    if (head.length<8) throw new Error('Abgeschnittener MOV-Header.');
+    const type=fourcc(head,4), raw=readU32BE(head,0);
+    let size=raw, header=8;
+    if (raw===1) {
+      if (head.length<16) throw new Error('Abgeschnittener MOV-Langheader.');
+      const longSize=new DataView(head.buffer).getBigUint64(8,false);
+      if (longSize>BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('MOV-Atom zu groß.');
+      size=Number(longSize); header=16;
+    } else if (raw===0) size=file.size-offset;
+    if (size<header || size>file.size-offset) throw new Error('Ungültige MOV-Atom-Größe.');
+    return {start:offset,end:offset+size,header,type};
+  }
+  async function emptyBox(file,box) {
+    const head=new Uint8Array(await file.slice(box.start,box.start+box.header).arrayBuffer());
+    writeFourcc(head,4,'free');
+    const zero=new Uint8Array(1024*1024), parts=[head];
+    for (let left=box.end-box.start-box.header;left>0;left-=zero.length)
+      parts.push(zero.subarray(0,Math.min(left,zero.length)));
+    return new Blob(parts);
+  }
+  async function stripMov(file) {
+    const parts=[];
+    let foundMoov=false;
+    for (let offset=0;offset<file.size;) {
+      const box=await topBox(file,offset);
+      if (!movTopLevel.has(box.type)) throw new Error(`MOV-Atom ${box.type} nicht unterstützt; keine unsichere Teilbereinigung.`);
+      if (box.type==='moov') {
+        const moov=new Uint8Array(await file.slice(box.start,box.end).arrayBuffer());
+        parts.push(scrubMoov(moov,box.header));
+        foundMoov=true;
+      } else if (movMetadata.has(box.type)) parts.push(await emptyBox(file,box));
+      else parts.push(file.slice(box.start,box.end));
+      offset=box.end;
+    }
+    if (!foundMoov) throw new Error('MOV ohne moov-Atom.');
+    return new Blob(parts,{type:'video/quicktime'});
+  }
+
+  // Uncompressed ZIP: PNG bytes are stored unchanged. Used only on demand for
+  // browser configurations that block a series of separate downloads.
+  async function zipPngs(entries) {
+    if (entries.length>65535) throw new Error('Zu viele Dateien für ZIP32.');
+    const encoder=new TextEncoder(), payload=[], directory=[];
+    let offset=0;
+    for (const {name,blob} of entries) {
+      const bytes=new Uint8Array(await blob.arrayBuffer());
+      const filename=encoder.encode(name);
+      if (bytes.length>0xffffffff || filename.length>65535 || offset>0xffffffff)
+        throw new Error('Bildserie zu groß für ZIP32. Bitte Einzeldateien herunterladen.');
+      const checksum=crc32(bytes), local=new Uint8Array(30+filename.length);
+      const header=new DataView(local.buffer);
+      writeU32LE(header,0,0x04034b50); writeU16LE(header,4,20);
+      writeU16LE(header,6,0x0800); writeU16LE(header,8,0);
+      writeU16LE(header,10,0); writeU16LE(header,12,33);
+      writeU32LE(header,14,checksum); writeU32LE(header,18,bytes.length);
+      writeU32LE(header,22,bytes.length); writeU16LE(header,26,filename.length);
+      writeU16LE(header,28,0); local.set(filename,30);
+      payload.push(local,blob);
+      const record=new Uint8Array(46+filename.length), central=new DataView(record.buffer);
+      writeU32LE(central,0,0x02014b50); writeU16LE(central,4,20);
+      writeU16LE(central,6,20); writeU16LE(central,8,0x0800);
+      writeU16LE(central,10,0); writeU16LE(central,12,0);
+      writeU16LE(central,14,33); writeU32LE(central,16,checksum);
+      writeU32LE(central,20,bytes.length); writeU32LE(central,24,bytes.length);
+      writeU16LE(central,28,filename.length); writeU16LE(central,30,0);
+      writeU16LE(central,32,0); writeU16LE(central,34,0);
+      writeU16LE(central,36,0); writeU32LE(central,38,0);
+      writeU32LE(central,42,offset); record.set(filename,46);
+      directory.push(record);
+      offset+=local.length+bytes.length;
+    }
+    const centralSize=directory.reduce((sum,record)=>sum+record.length,0);
+    if (offset+centralSize>0xffffffff) throw new Error('Bildserie zu groß für ZIP32.');
+    const end=new Uint8Array(22), view=new DataView(end.buffer);
+    writeU32LE(view,0,0x06054b50); writeU16LE(view,4,0);
+    writeU16LE(view,6,0); writeU16LE(view,8,entries.length);
+    writeU16LE(view,10,entries.length); writeU32LE(view,12,centralSize);
+    writeU32LE(view,16,offset); writeU16LE(view,20,0);
+    return new Blob([...payload,...directory,end],{type:'application/zip'});
+  }
+
+  const drop=document.getElementById('drop');
+  const input=document.getElementById('files');
+  const list=document.getElementById('list');
+  const summary=document.getElementById('summary');
+  const clear=document.getElementById('clear');
+  const zip=document.getElementById('zip');
+  let processing=false, archiving=false, total=0, completed=0, failed=0, sequence=Promise.resolve();
+  const urls=[], imageSeries=[], usedNames=new Set();
+  function formatSize(size) { return size>=1024*1024 ? `${(size/1024/1024).toFixed(1)} MB` : `${Math.round(size/1024)} KB`; }
+  function outputName(name) { return name.replace(/\.(png|mov)$/i,(_,ext)=>`_nM.${ext}`); }
+  function distinctName(name) {
+    const marker=name.lastIndexOf('_nM.');
+    const base=name.slice(0,marker), ext=name.slice(marker);
+    let candidate=name, index=2;
+    while (usedNames.has(candidate.toLowerCase())) candidate=`${base}_${index++}${ext}`;
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  }
+  function updateSummary() {
+    summary.textContent=processing ? `${completed+failed}/${total} verarbeitet · ${failed} Fehler` : (total?`${completed} fertig · ${failed} Fehler · ${total} Dateien`: 'Warte auf Dateien.');
+    clear.disabled=processing || archiving || !total;
+    zip.disabled=processing || archiving || imageSeries.length<2;
+  }
+  async function processFile(file) {
+    const name=distinctName(outputName(file.name));
+    const row=document.createElement('li'); row.className='item';
+    const info=document.createElement('div'); info.className='name';
+    const title=document.createElement('strong'); title.textContent=name;
+    const detail=document.createElement('small'); detail.textContent=`Verarbeite ${formatSize(file.size)} …`;
+    info.append(title,detail); row.append(info); list.append(row);
+    try {
+      const png=/\.png$/i.test(file.name);
+      const clean=png?await stripPng(file):await stripMov(file);
+      const url=URL.createObjectURL(clean); urls.push(url);
+      if (png) imageSeries.push({name,blob:clean});
+      const link=document.createElement('a'); link.href=url; link.download=name; link.textContent='Download';
+      link.setAttribute('aria-label',`${name} herunterladen`);
+      row.append(link); row.classList.add('done');
+      detail.textContent=`Fertig · ${formatSize(clean.size)} · Download gestartet`;
+      // Browser may block a series of automatic downloads. The visible link remains usable.
+      link.click();
+      completed++;
+    } catch (error) {
+      row.classList.add('error'); detail.textContent=`Fehler: ${error.message || error}`;
+      failed++;
+    }
+    updateSummary();
+  }
+  function enqueue(files) {
+    const supported=Array.from(files).filter(f=>/\.(png|mov)$/i.test(f.name));
+    if (!supported.length) { summary.textContent='Bitte PNG- oder MOV-Dateien wählen.'; return; }
+    total+=supported.length; processing=true; updateSummary();
+    sequence=sequence.then(async()=>{
+      for (const file of supported) await processFile(file);
+      processing=completed+failed<total; updateSummary();
+    });
+  }
+  drop.addEventListener('click',()=>input.click());
+  drop.addEventListener('keydown',event=>{ if (event.key==='Enter' || event.key===' ') { event.preventDefault(); input.click(); } });
+  input.addEventListener('change',()=>{ enqueue(input.files); input.value=''; });
+  for (const eventName of ['dragenter','dragover']) drop.addEventListener(eventName,event=>{
+    event.preventDefault(); drop.classList.add('over');
+  });
+  for (const eventName of ['dragleave','drop']) drop.addEventListener(eventName,event=>{
+    event.preventDefault(); drop.classList.remove('over');
+  });
+  drop.addEventListener('drop',event=>enqueue(event.dataTransfer.files));
+  zip.addEventListener('click',async()=>{
+    if (processing || archiving || imageSeries.length<2) return;
+    archiving=true; updateSummary();
+    try {
+      const archive=await zipPngs(imageSeries);
+      const url=URL.createObjectURL(archive); urls.push(url);
+      const link=document.createElement('a'); link.href=url;
+      link.download='KASKI_Bildserie_nM.zip'; link.textContent='ZIP herunterladen';
+      const row=document.createElement('li'); row.className='item done';
+      const name=document.createElement('strong'); name.textContent=link.download;
+      row.append(name,link); list.append(row); link.click();
+    } catch (error) { summary.textContent=`ZIP-Fehler: ${error.message || error}`; }
+    archiving=false; updateSummary();
+  });
+  clear.addEventListener('click',()=>{
+    if (processing || archiving) return;
+    for (const url of urls) URL.revokeObjectURL(url);
+    urls.length=0; imageSeries.length=0; usedNames.clear();
+    list.replaceChildren(); total=completed=failed=0; updateSummary();
+  });
+  window.addEventListener('beforeunload',()=>{ for (const url of urls) URL.revokeObjectURL(url); });
+})();
+</script>
+</body>
+</html>

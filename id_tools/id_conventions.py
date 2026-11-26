@@ -39,7 +39,7 @@ SHOT_STAGES = [
     "Scribble",
     "plate",
     "plateToCleanup",
-    "notEnhanced",
+    "generated",
     "enhanced",
 ]
 
@@ -49,8 +49,14 @@ SEQUENCE_STAGES = [
     "depth",
     "rendered",
     "scribble",
-    "toCleanup",
-    "notEnhanced",
+    "firstFrame",
+    "lastFrame",
+    "referenceFrame",
+    "ffToCleanup",
+    "lfToCleanup",
+    "rfToCleanup",
+    "plateToCleanup",
+    "generated",
     "enhanced",
 ]
 

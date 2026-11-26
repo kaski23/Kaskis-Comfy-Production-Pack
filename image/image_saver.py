@@ -227,11 +227,124 @@ def tensor_to_png(
     ]
 
 
-# ---------------------------------------------------------------------------
-# ComfyUI Saver
-# ---------------------------------------------------------------------------
+def _list_value(values, index, default=None):
+    """Broadcast a single widget value across a ComfyUI images list."""
+    if values is None:
+        return default
+    if not isinstance(values, list):
+        return values
+    return values[min(index, len(values) - 1)] if values else default
 
-class SavePNGwithMetadata(IO.ComfyNode):
+
+class _SavePNG(IO.ComfyNode):
+    """Common list handling, encoding, path allocation and UI results."""
+
+    WITH_METADATA = False
+
+    @classmethod
+    def _inputs(cls):
+        inputs = [
+            IO.Image.Input("images"),
+            IO.String.Input(
+                "filename_prefix", default="ComfyUI",
+                tooltip="Filename prefix. Supports ComfyUI formatting tokens.",
+            ),
+            IO.Combo.Input("bit_depth", options=["8-bit", "16-bit"], default="16-bit"),
+        ]
+        if cls.WITH_METADATA:
+            inputs += [
+                IO.Image.Input(
+                    "input_images", optional=True,
+                    tooltip="Reference images or batches embedded in each exported PNG; a reference list does not create extra files.",
+                ),
+                IO.String.Input("model_name", default="", optional=True),
+                IO.String.Input("user_prompt", default="", multiline=True, optional=True),
+                IO.Int.Input("seed", default=-1, optional=True),
+                IO.Boolean.Input(
+                    "save_workflow", default=True, display_name="Save Workflow",
+                    tooltip="Embed ComfyUI execution prompt and workflow. Other custom metadata remains enabled.",
+                ),
+            ]
+        return inputs
+
+    @classmethod
+    def execute(
+        cls, images, input_images=None, filename_prefix=None, bit_depth=None,
+        model_name=None, user_prompt=None, seed=None, save_workflow=None,
+    ) -> IO.NodeOutput:
+        # INPUT_IS_LIST: each item in images is one tensor/batch to save.
+        # input_images is a collection of references, never a second output axis.
+        if not isinstance(images, list):
+            images = [images]
+        if not images:
+            raise ValueError("No IMAGE inputs were provided.")
+
+        reference_pngs = []
+        if cls.WITH_METADATA and not args.disable_metadata:
+            for batch in input_images or []:
+                if batch is not None:
+                    reference_pngs.extend(tensor_to_png(batch, bit_depth=8))
+
+        results = []
+        for index, batch in enumerate(images):
+            prefix = _list_value(filename_prefix, index, "ComfyUI")
+            depth_name = _list_value(bit_depth, index, "16-bit")
+            if depth_name not in ("8-bit", "16-bit"):
+                raise ValueError(f"Unsupported PNG bit depth: {depth_name}")
+            pngs = tensor_to_png(batch, bit_depth=8 if depth_name == "8-bit" else 16)
+            metadata = cls._metadata(
+                _list_value(model_name, index, ""),
+                _list_value(user_prompt, index, ""),
+                _list_value(seed, index, -1),
+                _list_value(save_workflow, index, True),
+            )
+            output_dir = folder_paths.get_output_directory()
+            folder, name, counter, subfolder, _ = folder_paths.get_save_image_path(
+                prefix, output_dir, batch.shape[2], batch.shape[1]
+            )
+            for batch_number, png_bytes in enumerate(pngs):
+                if metadata:
+                    png_bytes = inject_png_metadata(png_bytes, metadata)
+                if reference_pngs:
+                    png_bytes = inject_reference_images(png_bytes, reference_pngs)
+                base = name.replace("%batch_num%", str(batch_number))
+                while True:
+                    filename = f"{base}_{counter:05}_.png"
+                    try:
+                        with open(os.path.join(folder, filename), "xb") as output:
+                            output.write(png_bytes)
+                        break
+                    except FileExistsError:
+                        counter += 1
+                results.append({"filename": filename, "subfolder": subfolder, "type": "output"})
+                counter += 1
+
+        return IO.NodeOutput(images, ui={"images": results})
+
+    @classmethod
+    def _metadata(cls, model_name, user_prompt, seed, save_workflow):
+        if not cls.WITH_METADATA or args.disable_metadata:
+            return {}
+        metadata = {}
+        if save_workflow:
+            if cls.hidden.prompt is not None:
+                metadata["prompt"] = json.dumps(cls.hidden.prompt, ensure_ascii=False)
+        extra_pnginfo = cls.hidden.extra_pnginfo
+        if extra_pnginfo:
+            for key, value in extra_pnginfo.items():
+                if not save_workflow and key in ("workflow", "prompt"):
+                    continue
+                metadata.setdefault(key, json.dumps(value, ensure_ascii=False))
+        if model_name:
+            metadata["model_name"] = str(model_name)
+        if user_prompt:
+            metadata["user_prompt"] = str(user_prompt)
+        metadata["seed"] = str(seed).strip()
+        return metadata
+
+
+class SavePNGwithMetadata(_SavePNG):
+    WITH_METADATA = True
 
     @classmethod
     def define_schema(cls):
@@ -241,202 +354,33 @@ class SavePNGwithMetadata(IO.ComfyNode):
             description="Saves 8-bit or 16-bit PNGs without color transforms.",
             category="KASKI/savers",
             search_aliases=["save png", "save image", "export png"],
-            inputs=[
-                IO.Image.Input("images"),
-
-                IO.Image.Input(
-                    "input_images",
-                    optional=True,
-                    tooltip="Optional images or batches embedded into every saved PNG as 8-bit references.",
-                ),
-
-                IO.String.Input(
-                    "filename_prefix",
-                    default="ComfyUI",
-                    tooltip="Filename prefix. Supports ComfyUI formatting tokens.",
-                ),
-
-                IO.Combo.Input(
-                    "bit_depth",
-                    options=["8-bit", "16-bit"],
-                    default="16-bit",
-                ),
-
-                IO.String.Input(
-                    "model_name",
-                    default="",
-                    optional=True,
-                    tooltip="Optional model name stored in PNG metadata.",
-                ),
-
-                IO.String.Input(
-                    "user_prompt",
-                    default="",
-                    multiline=True,
-                    optional=True,
-                    tooltip="Optional text prompt stored as user_prompt.",
-                ),
-
-                IO.Int.Input(
-                    "seed",
-                    default=-1,
-                    optional=True,
-                    tooltip="Optional generation seed stored in PNG metadata.",
-                ),
-            ],
-            hidden=[
-                IO.Hidden.prompt,
-                IO.Hidden.extra_pnginfo,
-            ],
+            inputs=cls._inputs(),
+            hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
             is_input_list=True,
             is_output_node=True,
-            outputs=[
-                IO.Image.Output(display_name="images", is_output_list=True),
-            ],
+            outputs=[IO.Image.Output(display_name="images", is_output_list=True)],
         )
 
+
+class SavePNGwithoutMetadata(_SavePNG):
     @classmethod
-    def execute(
-        cls,
-        images,
-        input_images=None,
-        filename_prefix=None,
-        bit_depth=None,
-        model_name=None,
-        user_prompt=None,
-        seed=None,
-    ) -> IO.NodeOutput:
-        reference_pngs = []
-        if not args.disable_metadata:
-            for batch in input_images or []:
-                if batch is not None:
-                    reference_pngs.extend(tensor_to_png(batch, bit_depth=8))
-
-        options = (
-            filename_prefix or ["ComfyUI"],
-            bit_depth or ["16-bit"],
-            model_name or [""],
-            user_prompt or [""],
-            seed or [-1],
-        )
-        results = []
-        for index, batch in enumerate(images):
-            batch_options = (values[min(index, len(values) - 1)] for values in options)
-            results.extend(cls._save_batch(batch, reference_pngs, *batch_options))
-
-        return IO.NodeOutput(images, ui={"images": results})
-
-    @classmethod
-    def _save_batch(
-        cls,
-        images,
-        reference_pngs,
-        filename_prefix,
-        bit_depth,
-        model_name,
-        user_prompt,
-        seed,
-    ):
-
-        # ---------------------------------------------------------------
-        # Encode
-        # ---------------------------------------------------------------
-
-        depth = 8 if bit_depth == "8-bit" else 16
-
-        png_list = tensor_to_png(
-            images,
-            bit_depth=depth,
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="KASKI_SaveImageWithoutMetadata",
+            display_name="Save PNG without metadata",
+            description="Saves PNGs with only IHDR, IDAT and IEND chunks; never embeds workflow or references.",
+            category="KASKI/savers",
+            search_aliases=["save png", "save image", "export png", "clean png", "without metadata", "no metadata", "no workflow"],
+            inputs=cls._inputs(),
+            is_input_list=True,
+            is_output_node=True,
+            outputs=[IO.Image.Output(display_name="images", is_output_list=True)],
         )
 
-        # ---------------------------------------------------------------
-        # Output path
-        # ---------------------------------------------------------------
 
-        output_dir = folder_paths.get_output_directory()
-
-        full_output_folder, filename, counter, subfolder, _ = (
-            folder_paths.get_save_image_path(
-                filename_prefix,
-                output_dir,
-                images.shape[2],
-                images.shape[1],
-            )
-        )
-
-        # ---------------------------------------------------------------
-        # Metadata
-        # ---------------------------------------------------------------
-
-        metadata = {}
-
-        if not args.disable_metadata:
-            workflow_prompt = cls.hidden.prompt
-            extra_pnginfo = cls.hidden.extra_pnginfo
-
-            # Standard ComfyUI execution prompt.
-            if workflow_prompt is not None:
-                metadata["prompt"] = json.dumps(
-                    workflow_prompt,
-                    ensure_ascii=False,
-                )
-
-            # Standard ComfyUI workflow and additional metadata.
-            if extra_pnginfo:
-                for key, value in extra_pnginfo.items():
-                    metadata.setdefault(
-                        key,
-                        json.dumps(value, ensure_ascii=False),
-                    )
-
-            # Custom metadata. Keep the user's text prompt separate
-            # from ComfyUI's reserved "prompt" workflow key.
-            if model_name:
-                metadata["model_name"] = str(model_name)
-
-            if user_prompt:
-                metadata["user_prompt"] = str(user_prompt)
-
-            metadata["seed"] = str(seed).strip()
+IMAGE_SAVER_NODES_LIST = [
+    SavePNGwithMetadata, 
+    SavePNGwithoutMetadata
+]
 
 
-        # ---------------------------------------------------------------
-        # Save batch
-        # ---------------------------------------------------------------
-
-        results = []
-
-        for batch_number, png_bytes in enumerate(png_list):
-            if metadata:
-                png_bytes = inject_png_metadata(png_bytes, metadata)
-
-            if reference_pngs:
-                png_bytes = inject_reference_images(
-                    png_bytes,
-                    reference_pngs,
-                )
-
-            name = filename.replace("%batch_num%", str(batch_number))
-
-            # Exclusive creation prevents accidentally overwriting files
-            # if another process has used the same counter.
-            while True:
-                file = f"{name}_{counter:05}_.png"
-                path = os.path.join(full_output_folder, file)
-
-                try:
-                    with open(path, "xb") as f:
-                        f.write(png_bytes)
-                    break
-                except FileExistsError:
-                    counter += 1
-
-            results.append({
-                "filename": file,
-                "subfolder": subfolder,
-                "type": "output",
-            })
-
-            counter += 1
-
-        return results

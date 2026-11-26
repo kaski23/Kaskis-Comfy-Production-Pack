@@ -2,8 +2,10 @@ import base64
 import io
 import json
 import logging
+import mmap
 import os
 import shutil
+import struct
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -462,12 +464,19 @@ def normalize_reference_files(reference_files) -> list[str]:
 
     references: list[str] = []
 
-    for value in reference_files.values():
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            references.append(text)
+    def collect(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                collect(item)
+        elif value is not None:
+            text = str(value).strip()
+            if text:
+                references.append(text)
+
+    collect(reference_files)
 
     return references
 
@@ -480,13 +489,14 @@ def build_mov_metadata(
     poster_frame_jpeg: str,
     workflow_prompt,
     extra_pnginfo,
+    save_workflow: bool = True,
 ) -> dict[str, str]:
     metadata: dict[str, str] = {}
 
     if args.disable_metadata:
         return metadata
 
-    if workflow_prompt is not None:
+    if save_workflow and workflow_prompt is not None:
         metadata["prompt"] = json.dumps(
             workflow_prompt,
             ensure_ascii=False,
@@ -495,6 +505,8 @@ def build_mov_metadata(
 
     if extra_pnginfo:
         for key, value in extra_pnginfo.items():
+            if not save_workflow and key in ("prompt", "workflow"):
+                continue
             metadata.setdefault(
                 str(key),
                 json.dumps(
@@ -867,205 +879,283 @@ class ProResEncoder:
 
 
 # ---------------------------------------------------------------------------
-# ComfyUI node
+# MOV descriptive metadata scrubber
 # ---------------------------------------------------------------------------
 
+_CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts", b"dinf"}
+_DESCRIPTION_ATOMS = {b"udta", b"meta", b"uuid"}
 
-class SaveProRes(IO.ComfyNode):
+
+def _atoms(data, start, end):
+    """Yield bounded QuickTime atoms; fail instead of silently skipping malformed data."""
+    offset = start
+    while offset < end:
+        if end - offset < 8:
+            raise ValueError("Truncated MOV atom header")
+        size = struct.unpack_from(">I", data, offset)[0]
+        kind = bytes(data[offset + 4:offset + 8])
+        header = 8
+        if size == 1:
+            if end - offset < 16:
+                raise ValueError("Truncated extended MOV atom header")
+            size = struct.unpack_from(">Q", data, offset + 8)[0]
+            header = 16
+        elif size == 0:
+            size = end - offset
+        if size < header or size > end - offset:
+            raise ValueError("Invalid MOV atom size")
+        yield offset, offset + size, offset + header, kind
+        offset += size
+
+
+def _erase(data, start, end):
+    # Keep atom sizes and sample offsets intact; turn removed atoms into free space.
+    data[start + 4:start + 8] = b"free"
+    header = 16 if struct.unpack_from(">I", data, start)[0] == 1 else 8
+    for position in range(start + header, end, 1024 * 1024):
+        data[position:min(position + 1024 * 1024, end)] = bytes(
+            min(1024 * 1024, end - position)
+        )
+
+
+def _clear_header_dates(data, payload, end):
+    if end - payload < 12:
+        raise ValueError("Truncated MOV time header")
+    width = 8 if data[payload] == 1 else 4
+    if end - payload < 4 + 2 * width:
+        raise ValueError("Truncated MOV time fields")
+    data[payload + 4:payload + 4 + 2 * width] = bytes(2 * width)
+
+
+def _clear_handler_name(data, payload, end):
+    # The 24-byte hdlr preamble carries the functional handler type.
+    if end - payload < 24:
+        raise ValueError("Truncated MOV handler")
+    data[payload + 24:end] = bytes(end - payload - 24)
+
+
+def _clear_sample_descriptions(data, payload, end):
+    if end - payload < 8:
+        raise ValueError("Truncated MOV sample description table")
+    count = struct.unpack_from(">I", data, payload + 4)[0]
+    entries = list(_atoms(data, payload + 8, end))
+    if len(entries) != count:
+        raise ValueError("MOV sample description count does not match")
+    for start, finish, _, codec in entries:
+        # Sample entry type is the codec FOURCC; retain it, dimensions, and codec config.
+        if codec in (b"apch", b"apcn", b"apcs", b"apco", b"ap4h", b"ap4x"):
+            if finish - start < 86:
+                raise ValueError("Truncated ProRes sample description")
+            data[start + 20:start + 24] = bytes(4)  # vendor
+            data[start + 50:start + 82] = bytes(32)  # compressor name
+        elif codec in (b"in24", b"lpcm", b"sowt", b"twos"):
+            if finish - start < 24:
+                raise ValueError("Truncated PCM sample description")
+            data[start + 20:start + 24] = bytes(4)  # vendor
+
+
+def strip_mov_descriptive_metadata(path: Path):
+    """Scrub QuickTime descriptive atoms and timestamps without re-encoding.
+
+    Operates in place on a private temporary file, before it is published.
+    Codec, color, dimensions, timebase and sample tables remain intact.
+    """
+    with open(path, "r+b") as output:
+        with mmap.mmap(output.fileno(), 0, access=mmap.ACCESS_WRITE) as data:
+            def walk(start, end):
+                for atom_start, atom_end, payload, kind in _atoms(data, start, end):
+                    if kind in _DESCRIPTION_ATOMS:
+                        _erase(data, atom_start, atom_end)
+                    elif kind in _CONTAINERS:
+                        walk(payload, atom_end)
+                    elif kind in (b"mvhd", b"tkhd", b"mdhd"):
+                        _clear_header_dates(data, payload, atom_end)
+                    elif kind == b"hdlr":
+                        _clear_handler_name(data, payload, atom_end)
+                    elif kind == b"stsd":
+                        _clear_sample_descriptions(data, payload, atom_end)
+
+            walk(0, len(data))
+            data.flush()
+
+
+class _CleanProResEncoder(ProResEncoder):
+    def _build_command(self, *args, **kwargs):
+        command = super()._build_command(*args, **kwargs)
+        # Explicitly suppress input/automatic metadata before scrubbing muxer atoms.
+        command[-1:-1] = [
+            "-map_chapters", "-1",
+            "-metadata", "encoder=",
+            "-metadata:s:v:0", "encoder=",
+            "-metadata:s:a:0", "encoder=",
+        ]
+        return command
+
+
+def _list_value(values, index, default=None):
+    if values is None:
+        return default
+    if not isinstance(values, list):
+        return values
+    return values[min(index, len(values) - 1)] if values else default
+
+
+class _SaveProRes(IO.ComfyNode):
+    """Each IMAGE list item is one (B,H,W,C) tensor, hence one MOV."""
+
+    WITH_METADATA = False
+
+    @classmethod
+    def _inputs(cls):
+        inputs = [
+            IO.Image.Input("images", tooltip="List item: one (B,H,W,C) video batch; B is the frame count."),
+            IO.Audio.Input("audio", optional=True, tooltip="Optional AUDIO per video; shorter lists repeat their final item."),
+            IO.Mask.Input("mask", optional=True, tooltip="Optional alpha mask for 4444 profiles, per video."),
+            IO.Combo.Input(
+                "prores_type", options=list(PRORES_PROFILES.keys()),
+                default="ProRes 422 HQ",
+                tooltip="422 is 10-bit; 4444 supports alpha; XQ requires strict 12-bit encoder support.",
+            ),
+            IO.Float.Input("framerate", default=25.0, min=0.01, max=1000.0, step=0.001),
+            IO.String.Input("filename_prefix", default="video/ComfyUI"),
+        ]
+        if cls.WITH_METADATA:
+            inputs += [
+                IO.String.Input("model_name", default="", optional=True),
+                IO.String.Input("user_prompt", default="", multiline=True, optional=True),
+                IO.Int.Input("seed", default=-1, optional=True),
+                IO.Autogrow.Input(
+                    "reference_files",
+                    template=IO.Autogrow.TemplatePrefix(
+                        input=IO.String.Input("reference", force_input=True),
+                        prefix="reference_", min=0, max=50,
+                    ),
+                    tooltip="All reference filenames are metadata for each video; a reference list creates no additional MOV.",
+                ),
+                IO.Boolean.Input(
+                    "save_workflow", default=True, display_name="Save Workflow",
+                    tooltip="Embed ComfyUI execution prompt and workflow. Other custom metadata remains enabled.",
+                ),
+            ]
+        inputs.append(
+            IO.Combo.Input(
+                "input_transfer", display_name="input transfer",
+                options=list(SDR_TRANSFER_TAGS), default="sRGB", optional=True,
+                tooltip="Transfer already used by the input RGB: sRGB or Rec.709.",
+            )
+        )
+        return inputs
+
+    @classmethod
+    def execute(
+        cls, images, audio=None, mask=None, prores_type=None, framerate=None,
+        filename_prefix=None, model_name=None, user_prompt=None, seed=None,
+        reference_files=None, input_transfer=None, save_workflow=None,
+    ) -> IO.NodeOutput:
+        if not isinstance(images, list):
+            images = [images]
+        if not images:
+            raise ValueError("No IMAGE batches were provided.")
+
+        references = normalize_reference_files(reference_files) if cls.WITH_METADATA else []
+        paths = []
+        previews = []
+        ffmpeg_path = resolve_ffmpeg()
+        for index, batch in enumerate(images):
+            if not isinstance(batch, torch.Tensor) or batch.ndim != 4:
+                raise ValueError("Each images list element must be an IMAGE tensor (B,H,W,C).")
+
+            profile = get_profile(_list_value(prores_type, index, "ProRes 422 HQ"))
+            fps = _list_value(framerate, index, 25.0)
+            prefix = _list_value(filename_prefix, index, "video/ComfyUI")
+            transfer = _list_value(input_transfer, index, "sRGB")
+            video_audio = _list_value(audio, index)
+            video_mask = _list_value(mask, index)
+
+            metadata = {}
+            if cls.WITH_METADATA and not args.disable_metadata:
+                metadata = build_mov_metadata(
+                    model_name=_list_value(model_name, index, ""),
+                    user_prompt=_list_value(user_prompt, index, ""),
+                    seed=_list_value(seed, index, -1),
+                    reference_files=references,
+                    poster_frame_jpeg=encode_poster_frame_jpeg(batch),
+                    workflow_prompt=cls.hidden.prompt,
+                    extra_pnginfo=cls.hidden.extra_pnginfo,
+                    save_workflow=bool(_list_value(save_workflow, index, True)),
+                )
+
+            folder, name, counter, subfolder = resolve_output_location(prefix, batch)
+            with tempfile.TemporaryDirectory(prefix=".kaski_prores_", dir=folder) as temp_dir:
+                encoded_path = Path(temp_dir) / "video.mov"
+                encoder_type = ProResEncoder if cls.WITH_METADATA else _CleanProResEncoder
+                encoder = encoder_type(
+                    ffmpeg_path=ffmpeg_path, profile=profile, framerate=fps,
+                    output_path=encoded_path, input_transfer=transfer,
+                )
+                encoder.encode(
+                    images=batch, mask=video_mask, audio=video_audio, metadata=metadata
+                )
+                if not cls.WITH_METADATA:
+                    strip_mov_descriptive_metadata(encoded_path)
+                output_path = publish_output(encoded_path, folder, name, counter)
+
+            paths.append(str(output_path))
+            previews.append({
+                "filename": output_path.name, "subfolder": subfolder, "type": "output",
+            })
+
+        return IO.NodeOutput(
+            images, paths,
+            ui={"images": previews, "animated": (True,)},
+        )
+
+
+class SaveProReswithMetadata(_SaveProRes):
+    WITH_METADATA = True
+
     @classmethod
     def define_schema(cls):
         return IO.Schema(
             node_id="KASKI_SaveProRes",
-            display_name="Save Video as ProRes",
-            description=(
-                "Saves an IMAGE batch as a ProRes MOV. Video is fed to FFmpeg as "
-                "16-bit RGB(A), encoded to at least 10-bit ProRes, and optional "
-                "audio is pitch-preservingly retimed to the output video duration."
-            ),
+            display_name="Save ProRes with metadata",
+            description="Exports one ProRes MOV per (B,H,W,C) list item, with optional metadata and audio.",
             category="KASKI/savers",
-            search_aliases=[
-                "save prores",
-                "save mov",
-                "prores",
-                "export video",
-            ],
-            inputs=[
-                IO.Image.Input(
-                    "images",
-                    tooltip="IMAGE batch interpreted as consecutive video frames.",
-                ),
-                IO.Audio.Input(
-                    "audio",
-                    optional=True,
-                    tooltip=(
-                        "Optional AUDIO. Its duration is pitch-preservingly adjusted "
-                        "to exactly frame_count / framerate."
-                    ),
-                ),
-                IO.Mask.Input(
-                    "mask",
-                    optional=True,
-                    tooltip=(
-                        "Optional alpha channel. White = visible, black = transparent. "
-                        "Used only by ProRes profiles that support alpha."
-                    ),
-                ),
-                IO.Combo.Input(
-                    "prores_type",
-                    options=list(PRORES_PROFILES.keys()),
-                    default="ProRes 422 HQ",
-                    tooltip=(
-                        "422 profiles are 10-bit. 4444 is 10-bit with optional alpha. "
-                        "4444 XQ is strict 12-bit and will error instead of silently "
-                        "falling back if the installed FFmpeg encoder cannot provide it."
-                    ),
-                ),
-                IO.Float.Input(
-                    "framerate",
-                    default=25.0,
-                    min=0.01,
-                    max=1000.0,
-                    step=0.001,
-                ),
-                IO.String.Input(
-                    "filename_prefix",
-                    default="video/ComfyUI",
-                    tooltip="Output filename prefix. Supports ComfyUI formatting tokens.",
-                ),
-                IO.String.Input(
-                    "model_name",
-                    default="",
-                    optional=True,
-                    tooltip="Optional model name stored in MOV metadata.",
-                ),
-                IO.String.Input(
-                    "user_prompt",
-                    default="",
-                    multiline=True,
-                    optional=True,
-                    tooltip="Optional generation prompt stored in MOV metadata.",
-                ),
-                IO.Int.Input(
-                    "seed",
-                    default=-1,
-                    optional=True,
-                    tooltip="Optional generation seed stored in MOV metadata. -1 omits the field.",
-                ),
-                IO.Autogrow.Input(
-                    "reference_files",
-                    template=IO.Autogrow.TemplatePrefix(
-                        input=IO.String.Input(
-                            "reference",
-                            force_input=True,
-                        ),
-                        prefix="reference_",
-                        min=0,
-                        max=50,
-                    ),
-                    tooltip=(
-                        "Optional reference filenames. Connected values are stored in "
-                        "MOV metadata as a JSON array in input order."
-                    ),
-                ),
-                IO.Combo.Input(
-                    "input_transfer",
-                    display_name="input transfer",
-                    options=list(SDR_TRANSFER_TAGS),
-                    default="sRGB",
-                    optional=True,
-                    tooltip=(
-                        "Transfer function already used by the input RGB. Select sRGB "
-                        "for typical generated images or Rec.709 for Rec.709-encoded plates. "
-                        "The export preserves this transfer function."
-                    ),
-                ),
-            ],
-            hidden=[
-                IO.Hidden.prompt,
-                IO.Hidden.extra_pnginfo,
-            ],
+            search_aliases=["save prores", "save mov", "prores", "export video", "save video"],
+            inputs=cls._inputs(),
+            hidden=[IO.Hidden.prompt, IO.Hidden.extra_pnginfo],
+            is_input_list=True,
             is_output_node=True,
             outputs=[
-                IO.Image.Output(display_name="images"),
-                IO.String.Output(display_name="filepath"),
+                IO.Image.Output(display_name="images", is_output_list=True),
+                IO.String.Output(display_name="filepath", is_output_list=True),
             ],
         )
 
+
+class SaveProReswithoutMetadata(_SaveProRes):
     @classmethod
-    def execute(
-        cls,
-        images: torch.Tensor,
-        audio=None,
-        mask: torch.Tensor | None = None,
-        prores_type: str = "ProRes 422 HQ",
-        framerate: float = 25.0,
-        filename_prefix: str = "video/ComfyUI",
-        model_name: str = "",
-        user_prompt: str = "",
-        seed: int = -1,
-        reference_files: IO.Autogrow.Type | None = None,
-        input_transfer: str = "sRGB",
-    ) -> IO.NodeOutput:
-        profile = get_profile(prores_type)
-        ffmpeg_path = resolve_ffmpeg()
-
-        references = normalize_reference_files(reference_files)
-        poster_frame_jpeg = (
-            ""
-            if args.disable_metadata
-            else encode_poster_frame_jpeg(images)
-        )
-
-        metadata = build_mov_metadata(
-            model_name=model_name,
-            user_prompt=user_prompt,
-            seed=seed,
-            reference_files=references,
-            poster_frame_jpeg=poster_frame_jpeg,
-            workflow_prompt=cls.hidden.prompt,
-            extra_pnginfo=cls.hidden.extra_pnginfo,
-        )
-
-        output_folder, filename, counter, subfolder = resolve_output_location(
-            filename_prefix,
-            images,
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix=".kaski_prores_", dir=output_folder
-        ) as temp_dir:
-            encoded_path = Path(temp_dir) / "video.mov"
-            encoder = ProResEncoder(
-                ffmpeg_path=ffmpeg_path,
-                profile=profile,
-                framerate=framerate,
-                output_path=encoded_path,
-                input_transfer=input_transfer,
-            )
-            encoder.encode(
-                images=images,
-                mask=mask,
-                audio=audio,
-                metadata=metadata,
-            )
-            output_path = publish_output(encoded_path, output_folder, filename, counter)
-
-        return IO.NodeOutput(
-            images,
-            str(output_path),
-            ui={
-                "images": [
-                    {
-                        "filename": output_path.name,
-                        "subfolder": subfolder,
-                        "type": "output",
-                    }
-                ],
-                "animated": (True,),
-            },
+    def define_schema(cls):
+        return IO.Schema(
+            node_id="KASKI_SaveProResWithoutMetadata",
+            display_name="Save ProRes without metadata",
+            description="Exports one MOV per (B,H,W,C) list item; strips descriptive container metadata and workflow.",
+            category="KASKI/savers",
+            search_aliases=["save prores", "save mov", "prores", "export video", "save video", "clean prores", "clean mov", "no workflow"],
+            inputs=cls._inputs(),
+            is_input_list=True,
+            is_output_node=True,
+            outputs=[
+                IO.Image.Output(display_name="images", is_output_list=True),
+                IO.String.Output(display_name="filepath", is_output_list=True),
+            ],
         )
 
 
-VIDEO_SAVER_NODES_LIST = [
-    SaveProRes,
-]
+# Keep the original Python import name and serialized node ID usable.
+SaveProRes = SaveProReswithMetadata
+VIDEO_SAVER_NODES_LIST = [SaveProReswithMetadata, SaveProReswithoutMetadata]
+
+
+
+

@@ -5,6 +5,65 @@ from comfy_execution.graph_utils import is_link
 from nodes import NODE_CLASS_MAPPINGS
 
 
+def _is_list_output(hidden, socket_name: str) -> bool:
+    """Distinguish a native list connection from ComfyUI's scalar list wrapper."""
+    if hidden is None or hidden.dynprompt is None:
+        return False
+
+    prompt = hidden.dynprompt
+    node_inputs = prompt.get_node(hidden.unique_id)["inputs"]
+    link = node_inputs.get(socket_name)
+    if link is None:
+        # V3 autogrow socket IDs can be serialized with their group prefix.
+        link = node_inputs.get(f"inputs.{socket_name}")
+    if link is None and isinstance(node_inputs.get("inputs"), dict):
+        link = node_inputs["inputs"].get(socket_name)
+    if not is_link(link):
+        return False
+
+    source_id, output_index = link
+    source_node = prompt.get_node(source_id)
+    source_class = NODE_CLASS_MAPPINGS[source_node["class_type"]]
+    list_outputs = getattr(source_class, "OUTPUT_IS_LIST", ())
+    return bool(list_outputs and list_outputs[output_index])
+
+
+class CreateList_KASKI(io.ComfyNode):
+    @classmethod
+    def define_schema(cls) -> io.Schema:
+        return io.Schema(
+            node_id="CreateList_KASKI",
+            display_name="Create List",
+            category="KASKI/flow_control",
+            description="Create a native ComfyUI list from Any inputs, one item per socket.",
+            is_input_list=True,
+            inputs=[
+                io.Autogrow.Input(
+                    "inputs",
+                    template=io.Autogrow.TemplatePrefix(
+                        input=io.AnyType.Input("item", force_input=True),
+                        prefix="item_",
+                        min=0,
+                        max=100,
+                    ),
+                    tooltip="Add inputs in order. An upstream list stays one nested item.",
+                ),
+            ],
+            outputs=[io.AnyType.Output(display_name="items", is_output_list=True)],
+            hidden=[io.Hidden.dynprompt, io.Hidden.unique_id],
+        )
+
+    @classmethod
+    def execute(cls, inputs: io.Autogrow.Type) -> io.NodeOutput:
+        result = []
+        for name, values in (inputs or {}).items():
+            if len(values) == 1 and not _is_list_output(cls.hidden, name):
+                result.append(values[0])
+            else:
+                result.append(list(values))
+        return io.NodeOutput(result)
+
+
 class EnumerateList_KASKI(io.ComfyNode):
     @classmethod
     def define_schema(cls) -> io.Schema:
@@ -228,24 +287,11 @@ class AppendToList_KASKI(io.ComfyNode):
 
     @classmethod
     def _element_is_list_output(cls) -> bool:
-        # ComfyUI wraps scalar outputs too, so a one-item list needs a schema check.
-        hidden = cls.hidden
-        if hidden is None or hidden.dynprompt is None:
-            return False
-
-        prompt = hidden.dynprompt
-        link = prompt.get_node(hidden.unique_id)["inputs"].get("element")
-        if not is_link(link):
-            return False
-
-        source_id, output_index = link
-        source_node = prompt.get_node(source_id)
-        source_class = NODE_CLASS_MAPPINGS[source_node["class_type"]]
-        list_outputs = getattr(source_class, "OUTPUT_IS_LIST", ())
-        return bool(list_outputs and list_outputs[output_index])
+        return _is_list_output(cls.hidden, "element")
 
 
 BATCHES_LISTS_NODES_LIST = [
+    CreateList_KASKI,
     EnumerateList_KASKI,
     GetListLength_KASKI,
     EditList_KASKI,
